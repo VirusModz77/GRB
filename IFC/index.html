@@ -1,0 +1,2670 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+<title>modelo.ifc</title>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     LISTA DE MODELOS  ·  vive en library.json, junto a este index.html
+     ─────────────────────────────────────────────────────────────────────
+     Al abrir index.html sin modelo en la URL se muestra el menú, y el menú
+     siempre lee la lista de library.json. Cada entrada puede ser el nombre
+     del archivo a secas o un objeto con datos:
+
+       'casa.ifc'
+       { file: 'casa.ifc', title: 'Casa en la ladera', note: 'Anteproyecto' }
+
+     La miniatura se busca sola en thumbnails/ con el mismo nombre que el
+     IFC: thumbnails/casa.png, .jpg, .jpeg, .webp o .avif (también vale
+     thumbnails/casa.ifc.png). Si no hay ninguna, la tarjeta muestra un
+     marcador de posición. Con 'thumb' se puede forzar otra ruta.
+
+     Los IFC pueden estar en subcarpetas: 'obra/casa.ifc' funciona igual.
+     ═══════════════════════════════════════════════════════════════════ -->
+<script>
+window.IFC_LIBRARY = {
+
+  // Título del menú. Vacío = se traduce solo al idioma del navegador.
+  title: '',
+
+  // Carpeta de miniaturas y extensiones que se prueban, por orden.
+  thumbDir: 'thumbnails/',
+  thumbExt: ['png', 'jpg', 'jpeg', 'webp', 'avif'],
+
+  // El menú SIEMPRE lee la lista de este archivo, así se pueden añadir o
+  // quitar modelos sin tocar el index.html. Formato admitido:
+  //   ["casa.ifc", {"file":"nave.ifc","title":"Nave","note":"Fase 2"}]
+  // o bien {"models":[…]}. Si el archivo no existe, no se puede leer o está
+  // vacío, el menú muestra el aviso explicando cómo crearlo (no hay lista
+  // de respaldo dentro de este index.html).
+  manifest: 'library.json'
+};
+</script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Manrope:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+  /* Design tokens copied verbatim from the document reader so both
+     viewers read as the same application. */
+  :root{
+    --bg-viewer: #232323;
+    --bg-viewer-2: #1c1c1c;
+    --bg-toolbar: rgba(17,17,18,0.88);
+    --bg-panel: #1a1a1c;
+    --ink: #f2f1ee;
+    --ink-dim: #9a9995;
+    --ink-faint: #6b6a67;
+    --accent: #e7e7e4;
+    --accent-bright: #f5f5f3;
+    --accent-text: #e5e4e0;
+    --accent-ink: #1c1c1c;
+    --border: rgba(255,255,255,0.08);
+    --shadow-deep: 0 30px 80px rgba(0,0,0,0.55);
+    --radius: 10px;
+    --font-display: 'Plus Jakarta Sans', system-ui, sans-serif;
+    --font-body: 'Manrope', system-ui, sans-serif;
+  }
+
+  *{ box-sizing: border-box; }
+
+  html,body{
+    margin:0; padding:0; height:100%;
+    height: -webkit-fill-available;
+    background: var(--bg-viewer);
+    font-family: var(--font-body);
+    color: var(--ink);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  #app{
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    height: -webkit-fill-available;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    background:
+      radial-gradient(ellipse 90% 60% at 50% 8%, rgba(255,255,255,0.05), transparent 60%),
+      linear-gradient(180deg, var(--bg-viewer) 0%, var(--bg-viewer-2) 100%);
+  }
+
+  /* ---------- Viewer stage ---------- */
+  /* The WebGL canvas is transparent, so the app gradient above is what's
+     seen behind the model — same backdrop as the document reader. */
+  #stage{
+    position: relative;
+    flex: 1 1 auto;
+    overflow: hidden;
+    touch-action: none;
+  }
+  #viewport{
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    outline: none;
+    touch-action: none;
+  }
+
+  /* ---------- Section hint ---------- */
+  #section-hint, #compat-note{
+    position: absolute;
+    left: 50%;
+    top: 22px;
+    transform: translateX(-50%);
+    background: var(--bg-toolbar);
+    border: 1px solid var(--border);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border-radius: 999px;
+    padding: 9px 16px;
+    font-family: var(--font-display);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--ink-dim);
+    box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.35s ease;
+    z-index: 9;
+    white-space: nowrap;
+  }
+  #section-hint.show, #compat-note.show{ opacity: 1; }
+
+  /* Same pill as the section hint, but it has a sentence to fit and it
+     stays put once shown. */
+  #compat-note{
+    white-space: normal;
+    text-align: center;
+    line-height: 1.5;
+    max-width: min(460px, calc(100vw - 36px));
+    color: var(--ink);
+    z-index: 60;
+  }
+
+  /* ---------- Controls help ---------- */
+  #help-panel{
+    position: absolute;
+    top: 18px;
+    left: 18px;
+    z-index: 9;
+    background: var(--bg-toolbar);
+    border: 1px solid var(--border);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border-radius: 14px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+    padding: 10px 12px;
+    max-width: 268px;
+    user-select: none;
+  }
+  #help-head{
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding: 0;
+    width: 100%;
+    color: var(--ink-faint);
+    font-family: var(--font-display);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  #help-head:hover{ color: var(--ink-dim); }
+  #help-head svg{
+    width: 13px; height: 13px;
+    margin-left: auto;
+    transition: transform 0.2s ease;
+  }
+  #help-panel.collapsed #help-head svg{ transform: rotate(-90deg); }
+  #help-panel.collapsed #help-body{ display: none; }
+  #help-body{
+    display: grid;
+    grid-template-columns: auto 1fr 1fr;
+    gap: 7px 12px;
+    margin-top: 11px;
+    font-size: 11px;
+    line-height: 1.35;
+  }
+  #help-body .hh{
+    font-family: var(--font-display);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  #help-body .ha{
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 11px;
+    color: var(--ink);
+    white-space: nowrap;
+  }
+  #help-body .hv{ color: var(--ink-dim); }
+
+  /* Back to the menu: a plain round icon button, same size and finish as
+     the toolbar's own buttons (.tb-btn). It's a sibling of #toolbar (not
+     inside #stage, which clips overflow), positioned so its centre lines
+     up with the centre of #toolbar-inner, the icon row directly below it:
+     toolbar's bottom padding (12px + safe-area) plus half of toolbar-inner's
+     own height (54px / 2 = 27px), minus half the button's height (19px). */
+  #btn-back{
+    position: absolute;
+    left: 18px;
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px) + 27px - 19px);
+    z-index: 60;
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-toolbar);
+    border: 1px solid var(--border);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+    color: var(--ink-dim);
+    text-decoration: none;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease;
+  }
+  #btn-back svg{ width: 17px; height: 17px; }
+  #btn-back:hover{
+    background: rgba(255,255,255,0.1);
+    color: var(--ink);
+    transform: translateY(-1px);
+  }
+  #btn-back:active{ transform: translateY(0); }
+
+  /* ---------- Bottom bars ---------- */
+  #toolbar{
+    position: relative;
+    z-index: 10;
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 12px 18px;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+
+  #view-bar-inner{
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    background: var(--bg-toolbar);
+    border: 1px solid var(--border);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border-radius: 999px;
+    padding: 6px 10px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+    max-width: calc(100vw - 24px);
+  }
+  .vb-label{
+    font-family: var(--font-display);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    padding: 0 7px 0 3px;
+    white-space: nowrap;
+  }
+  .vb-btn{
+    min-width: 30px;
+    height: 28px;
+    padding: 0 8px;
+    border-radius: 999px;
+    background: transparent;
+    border: none;
+    color: var(--ink-dim);
+    cursor: pointer;
+    font-family: var(--font-display);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    transition: background 0.15s ease, color 0.15s ease;
+    flex: 0 0 auto;
+  }
+  .vb-btn:hover{ background: rgba(255,255,255,0.08); color: var(--ink); }
+  .vb-btn.active{ background: var(--accent); color: var(--accent-ink); }
+  .vb-btn svg{ width: 13px; height: 13px; }
+  #toolbar-inner{
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--bg-toolbar);
+    border: 1px solid var(--border);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border-radius: 999px;
+    padding: 8px 10px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+    max-width: calc(100vw - 24px);
+  }
+
+  .tb-btn{
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    color: var(--ink-dim);
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+    position: relative;
+    flex: 0 0 auto;
+  }
+  .tb-btn:hover{ background: rgba(255,255,255,0.08); color: var(--ink); }
+  .tb-btn.active{ background: var(--accent); color: var(--accent-ink); }
+  .tb-btn[disabled]{ opacity: 0.32; pointer-events: none; }
+  .tb-btn svg{ width: 18px; height: 18px; }
+
+  .tb-sep{
+    width: 1px;
+    height: 22px;
+    background: var(--border);
+    margin: 0 6px;
+    flex: 0 0 auto;
+  }
+
+  #model-name{
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--ink);
+    padding: 0 12px;
+    white-space: nowrap;
+    max-width: 30vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    letter-spacing: 0.01em;
+  }
+  #model-name .ext{ color: var(--ink-faint); font-weight: 500; }
+
+  /* ---------- Loading overlay ---------- */
+  #loading-overlay{
+    position: fixed;
+    inset: 0;
+    background: linear-gradient(180deg, var(--bg-viewer) 0%, var(--bg-viewer-2) 100%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    z-index: 50;
+    transition: opacity 0.4s ease;
+  }
+  #loading-overlay.hidden{ opacity: 0; pointer-events: none; }
+
+  /* A small house assembling itself, in the reader's palette: slab, walls,
+     roof, then the openings, a beat with the house standing, and away again.
+     One shared 3.6s cycle; each piece's own keyframes hold its entry time so
+     they all clear together instead of rippling out of sync. */
+  .house-builder{
+    width: 66px;
+    height: 60px;
+    overflow: visible;
+  }
+  .hb-ground{
+    stroke: var(--ink-faint);
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    opacity: 0.5;
+  }
+  .hb{
+    opacity: 0;
+    transform-box: fill-box;
+    transform-origin: 50% 100%;
+    animation-duration: 3.6s;
+    animation-iteration-count: infinite;
+    animation-timing-function: cubic-bezier(0.34, 1.32, 0.5, 1);
+  }
+  .hb-solid{ fill: var(--accent); }
+  .hb-roof{ fill: var(--accent-bright); }
+  .hb-hole{ fill: var(--bg-viewer-2); }
+
+  .hb-slab  { animation-name: hb-rise-1; }
+  .hb-wall  { animation-name: hb-rise-2; }
+  .hb-roof  { animation-name: hb-drop; }
+  .hb-door  { animation-name: hb-open-1; }
+  .hb-win-l { animation-name: hb-open-2; }
+  .hb-win-r { animation-name: hb-open-3; }
+
+  @keyframes hb-rise-1{
+    0%, 2%    { opacity: 0; transform: translateY(7px) scaleY(0.35); }
+    12%, 80%  { opacity: 1; transform: none; }
+    90%, 100% { opacity: 0; transform: scale(0.92); }
+  }
+  @keyframes hb-rise-2{
+    0%, 11%   { opacity: 0; transform: translateY(9px) scaleY(0.25); }
+    23%, 80%  { opacity: 1; transform: none; }
+    90%, 100% { opacity: 0; transform: scale(0.92); }
+  }
+  @keyframes hb-drop{
+    0%, 22%   { opacity: 0; transform: translateY(-11px) scale(0.9); }
+    34%, 80%  { opacity: 1; transform: none; }
+    90%, 100% { opacity: 0; transform: scale(0.92); }
+  }
+  @keyframes hb-open-1{
+    0%, 33%   { opacity: 0; transform: scaleY(0.2); }
+    41%, 80%  { opacity: 1; transform: none; }
+    90%, 100% { opacity: 0; }
+  }
+  @keyframes hb-open-2{
+    0%, 39%   { opacity: 0; transform: scale(0.3); }
+    47%, 80%  { opacity: 1; transform: none; }
+    90%, 100% { opacity: 0; }
+  }
+  @keyframes hb-open-3{
+    0%, 44%   { opacity: 0; transform: scale(0.3); }
+    52%, 80%  { opacity: 1; transform: none; }
+    90%, 100% { opacity: 0; }
+  }
+  #loading-text{
+    font-family: var(--font-display);
+    font-size: 13px;
+    color: var(--ink-dim);
+    letter-spacing: 0.02em;
+  }
+  #loading-progress-track{
+    width: 200px; height: 3px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  #loading-progress-bar{
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--accent), var(--accent-bright));
+    transition: width 0.25s ease;
+  }
+
+  #error-box{
+    display: none;
+    max-width: 420px;
+    text-align: center;
+    font-family: var(--font-body);
+    color: var(--ink-dim);
+    font-size: 13px;
+    line-height: 1.6;
+    padding: 0 24px;
+  }
+  #error-box strong{ color: var(--ink); font-family: var(--font-display); }
+  #error-box code{
+    background: rgba(255,255,255,0.08);
+    padding: 1px 6px;
+    border-radius: 4px;
+    color: var(--accent-text);
+  }
+  #error-detail{
+    display: block;
+    margin-top: 12px;
+    font-size: 11px;
+    color: var(--ink-faint);
+  }
+
+
+  /* ---------- Model library (index.html opened with no model in the URL) ----
+     Same tokens as the viewer, so the menu and the model read as one app. */
+  #library{
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    background:
+      radial-gradient(ellipse 90% 55% at 50% 0%, rgba(255,255,255,0.05), transparent 62%),
+      linear-gradient(180deg, var(--bg-viewer) 0%, var(--bg-viewer-2) 100%);
+    padding: 0;
+  }
+  #library[hidden]{ display: none; }
+  /* #app is display:flex, which would otherwise beat the browser's [hidden]. */
+  #app[hidden]{ display: none; }
+  /* Same measurements as the document library in the PDF viewer, so the two
+     menus read as the same screen: fixed 1100px column, title on the left,
+     search on the right, plain status line underneath. */
+  .lib-shell{
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 56px 32px calc(72px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .lib-head-row{
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    margin-bottom: 36px;
+  }
+  #lib-title{
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: 26px;
+    font-weight: 800;
+    color: var(--ink);
+    letter-spacing: -0.01em;
+  }
+
+  /* Search box: always available, sitting in the header row next to the title. */
+  #lib-search-wrap{
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: min(340px, 100%);
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 11px 16px;
+  }
+  #lib-search-wrap[hidden]{ display: none; }
+  #lib-search-wrap svg{
+    width: 17px; height: 17px;
+    color: var(--ink-faint);
+    flex: 0 0 auto;
+  }
+  #lib-search{
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 14px;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  #lib-search::placeholder{ color: var(--ink-faint); }
+  #lib-search::-webkit-search-cancel-button{ filter: invert(0.6); }
+
+  #lib-grid{
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(238px, 1fr));
+    gap: 18px;
+    list-style: none;
+    padding: 0;
+  }
+
+  .lib-card{
+    display: flex;
+    flex-direction: column;
+    background: rgba(255,255,255,0.035);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+    text-decoration: none;
+    color: inherit;
+    transition: transform 0.18s ease, border-color 0.18s ease,
+                background 0.18s ease, box-shadow 0.18s ease;
+  }
+  .lib-card:hover, .lib-card:focus-visible{
+    transform: translateY(-3px);
+    border-color: rgba(255,255,255,0.18);
+    background: rgba(255,255,255,0.065);
+    box-shadow: 0 18px 44px rgba(0,0,0,0.45);
+    outline: none;
+  }
+  .lib-card:active{ transform: translateY(-1px); }
+  .lib-card[hidden]{ display: none; }
+
+  .lib-thumb{
+    position: relative;
+    display: block;
+    aspect-ratio: 4 / 3;
+    background:
+      radial-gradient(ellipse 80% 70% at 50% 22%, rgba(255,255,255,0.06), transparent 65%),
+      var(--bg-panel);
+    border-bottom: 1px solid var(--border);
+    overflow: hidden;
+  }
+  /* aspect-ratio fallback for older Safari */
+  @supports not (aspect-ratio: 4 / 3){
+    .lib-thumb{ height: 0; padding-bottom: 75%; }
+  }
+  .lib-thumb img{
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    opacity: 0;
+    transition: opacity 0.35s ease, transform 0.35s ease;
+  }
+  .lib-thumb img.ready{ opacity: 1; }
+  .lib-card:hover .lib-thumb img.ready{ transform: scale(1.035); }
+
+  /* Placeholder while there is no thumbnail file for this model. */
+  .lib-fallback{
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .lib-fallback svg{
+    width: 54px;
+    height: 49px;
+    opacity: 0.28;
+  }
+  .lib-fallback .fb-solid{ fill: var(--accent); }
+  .lib-fallback .fb-roof{ fill: var(--accent-bright); }
+  .lib-fallback .fb-hole{ fill: var(--bg-panel); }
+  .lib-fallback .fb-ground{
+    stroke: var(--ink-faint);
+    stroke-width: 1.6;
+    stroke-linecap: round;
+  }
+
+  .lib-info{
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 13px 14px;
+    min-height: 58px;
+  }
+  .lib-text{ min-width: 0; }
+  .lib-name{
+    display: block;
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 13.5px;
+    letter-spacing: 0.01em;
+    color: var(--ink);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .lib-note{
+    display: block;
+    margin-top: 3px;
+    font-size: 11.5px;
+    line-height: 1.4;
+    color: var(--ink-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .lib-go{
+    margin-left: auto;
+    flex: 0 0 auto;
+    width: 26px; height: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    color: var(--ink-faint);
+    transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease;
+  }
+  .lib-go svg{ width: 15px; height: 15px; }
+  .lib-card:hover .lib-go{
+    background: var(--accent);
+    color: var(--accent-ink);
+    transform: translateX(2px);
+  }
+
+  #lib-empty{
+    margin-top: 30px;
+    border: 1px dashed var(--border);
+    border-radius: 14px;
+    padding: 30px 24px;
+    text-align: center;
+    color: var(--ink-dim);
+    font-size: 13px;
+    line-height: 1.65;
+  }
+  #lib-empty[hidden]{ display: none; }
+  #lib-empty strong{
+    display: block;
+    margin-bottom: 7px;
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 14px;
+    color: var(--ink);
+  }
+  #lib-empty code{
+    background: rgba(255,255,255,0.08);
+    padding: 1px 6px;
+    border-radius: 4px;
+    color: var(--accent-text);
+    font-size: 12px;
+  }
+
+  @media (max-width: 560px){
+    .lib-shell{ padding: 40px 18px calc(56px + env(safe-area-inset-bottom, 0px)); }
+    .lib-head-row{ flex-direction: column; align-items: stretch; }
+    #lib-search-wrap{ width: 100%; }
+  }
+
+  @media (max-width: 520px){
+    #lib-grid{ grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 13px; }
+    .lib-info{ padding: 11px 12px; min-height: 52px; }
+    .lib-note{ display: none; }
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    .lib-card, .lib-thumb img, .lib-go{ transition: none; }
+    .lib-card:hover{ transform: none; }
+    .lib-card:hover .lib-thumb img.ready{ transform: none; }
+  }
+
+  @media (max-width: 720px){
+    #model-name{ max-width: 34vw; }
+    #section-hint{ font-size: 11px; padding: 8px 13px; }
+    #help-panel{ top: 12px; left: 12px; max-width: calc(100vw - 24px); }
+    #btn-back{ left: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px) + 27px - 17px); width: 34px; height: 34px; }
+    #btn-back svg{ width: 15px; height: 15px; }
+    .vb-label{ display: none; }
+    #view-bar-inner{ gap: 1px; padding: 5px 7px; }
+    .vb-btn{ min-width: 28px; padding: 0 6px; }
+  }
+  @media (max-width: 380px){
+    #btn-back{ bottom: calc(12px + env(safe-area-inset-bottom, 0px) + 25px - 17px); }
+    #toolbar-inner{ gap: 2px; padding: 6px 6px; }
+    .tb-btn{ width: 34px; height: 34px; }
+    #model-name{ padding: 0 6px; font-size: 12px; max-width: 26vw; }
+    .tb-sep{ margin: 0 2px; }
+    .vb-btn{ min-width: 25px; padding: 0 4px; font-size: 10px; height: 26px; }
+    .vb-btn .lbl{ display: none; }
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    .hb{ animation-duration: 9s; animation-timing-function: ease-in-out; }
+    #section-hint{ transition: none; }
+  }
+</style>
+</head><script src="/track.js" defer></script>
+<body>
+
+<div id="app">
+
+  <div id="stage">
+    <canvas id="viewport"></canvas>
+
+    <div id="section-hint" data-i18n="h.sec"></div>
+
+    <div id="compat-note" data-i18n="c.unsup"></div>
+
+    <div id="help-panel" class="collapsed">
+      <button id="help-head" aria-expanded="false" aria-controls="help-body">
+        <span data-i18n="p.title">Controls</span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <div id="help-body">
+        <span></span>
+        <span class="hh" data-i18n="p.mouse">Mouse</span>
+        <span class="hh" data-i18n="p.touch">Touch</span>
+
+        <span class="ha" data-i18n="p.rot">Rotate</span>
+        <span class="hv" data-i18n="p.rotM">Drag</span>
+        <span class="hv" data-i18n="p.rotT">1 finger</span>
+
+        <span class="ha" data-i18n="p.pan">Pan</span>
+        <span class="hv" data-i18n="p.panM">Right-click or arrows</span>
+        <span class="hv" data-i18n="p.panT">2 fingers</span>
+
+        <span class="ha" data-i18n="p.zoom">Zoom</span>
+        <span class="hv" data-i18n="p.zoomM">Wheel or + / −</span>
+        <span class="hv" data-i18n="p.zoomT">Pinch</span>
+      </div>
+    </div>
+
+    <div id="loading-overlay">
+      <svg class="house-builder" viewBox="0 0 66 60" aria-hidden="true">
+        <line class="hb-ground" x1="4" y1="53" x2="62" y2="53"/>
+        <rect class="hb hb-solid hb-slab" x="11" y="46" width="44" height="6" rx="1.5"/>
+        <rect class="hb hb-solid hb-wall" x="15" y="28" width="36" height="18"/>
+        <path class="hb hb-roof" d="M8 29 33 10 58 29 Z"/>
+        <rect class="hb hb-hole hb-door" x="29" y="36" width="8" height="10" rx="0.8"/>
+        <rect class="hb hb-hole hb-win-l" x="19" y="32" width="7" height="6" rx="0.8"/>
+        <rect class="hb hb-hole hb-win-r" x="40" y="32" width="7" height="6" rx="0.8"/>
+      </svg>
+      <div id="loading-text" data-i18n="l.init">Starting viewer…</div>
+      <div id="loading-progress-track"><div id="loading-progress-bar"></div></div>
+      <div id="error-box">
+        <strong id="error-title" data-i18n="e.title">The model could not be displayed</strong><br><br>
+        <span id="error-body"></span>
+        <span id="error-detail"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Back to the menu: a direct child of #app (not #stage, which clips
+       overflow) so it can sit at the same height as the toolbar's icon row
+       underneath it, rather than being confined to the canvas area above. -->
+  <a id="btn-back" href="#" data-i18n-title="g.back">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
+  </a>
+
+  <!-- Toolbar -->
+  <div id="toolbar">
+
+    <div id="view-bar-inner">
+      <span class="vb-label" data-i18n="v.iso">Iso</span>
+      <button class="vb-btn" data-view="iso-ne" data-i18n="d.NE" data-i18n-title="v.isoNE">NE</button>
+      <button class="vb-btn" data-view="iso-se" data-i18n="d.SE" data-i18n-title="v.isoSE">SE</button>
+      <button class="vb-btn" data-view="iso-so" data-i18n="d.SW" data-i18n-title="v.isoSW">SW</button>
+      <button class="vb-btn" data-view="iso-no" data-i18n="d.NW" data-i18n-title="v.isoNW">NW</button>
+
+      <div class="tb-sep"></div>
+
+      <span class="vb-label" data-i18n="v.elev">Elevation</span>
+      <button class="vb-btn" data-view="el-n" data-i18n="d.N" data-i18n-title="v.elN">N</button>
+      <button class="vb-btn" data-view="el-e" data-i18n="d.E" data-i18n-title="v.elE">E</button>
+      <button class="vb-btn" data-view="el-s" data-i18n="d.S" data-i18n-title="v.elS">S</button>
+      <button class="vb-btn" data-view="el-o" data-i18n="d.W" data-i18n-title="v.elW">W</button>
+
+      <div class="tb-sep"></div>
+
+      <button class="vb-btn" data-view="top" data-i18n-title="v.planT">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="17" height="17" rx="2"/><path d="M3.5 10h17M10 3.5v17"/></svg>
+        <span class="lbl" data-i18n="v.plan">Plan</span>
+      </button>
+    </div>
+
+    <div id="toolbar-inner">
+      <button class="tb-btn" id="btn-library" data-i18n-title="g.back">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3.4" y="3.4" width="7.2" height="7.2" rx="1.6"/><rect x="13.4" y="3.4" width="7.2" height="7.2" rx="1.6"/><rect x="3.4" y="13.4" width="7.2" height="7.2" rx="1.6"/><rect x="13.4" y="13.4" width="7.2" height="7.2" rx="1.6"/></svg>
+      </button>
+
+      <div class="tb-sep"></div>
+
+      <button class="tb-btn" id="btn-section" data-i18n-title="t.sec">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.6 20.5 7v10L12 21.4 3.5 17V7z"/><path d="M12 12.2 20.5 7M12 12.2 3.5 7M12 12.2v9.2"/><path d="M7.7 4.8 16.3 19.2" stroke-dasharray="2.4 2.4"/></svg>
+      </button>
+
+      <button class="tb-btn" id="btn-section-reset" data-i18n-title="t.reset" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"/><path d="M3.2 4.6v4.6h4.6"/></svg>
+      </button>
+
+      <div class="tb-sep"></div>
+
+      <span id="model-name">modelo<span class="ext">.ifc</span></span>
+
+      <div class="tb-sep"></div>
+
+      <button class="tb-btn" id="btn-white" data-i18n-title="t.white">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.6"/><path d="M12 3.4a8.6 8.6 0 0 1 0 17.2z" fill="currentColor" stroke="none"/></svg>
+      </button>
+
+      <button class="tb-btn" id="btn-fit" data-i18n-title="t.center">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5.4"/><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/><path d="M12 2.2v3.1M12 18.7v3.1M2.2 12h3.1M18.7 12h3.1"/></svg>
+      </button>
+
+      <button class="tb-btn" id="btn-fullscreen" data-i18n-title="t.full">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
+      </button>
+    </div>
+  </div>
+
+</div>
+
+<!-- Model library: replaces the viewer when the URL carries no model. -->
+<div id="library" hidden>
+  <div class="lib-shell">
+    <div class="lib-head-row">
+      <h1 id="lib-title" data-i18n="g.title">Models</h1>
+      <div id="lib-search-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+        <input id="lib-search" type="search" autocomplete="off" spellcheck="false" data-i18n-ph="g.search">
+      </div>
+    </div>
+
+    <div id="lib-grid"></div>
+    <div id="lib-empty" hidden></div>
+  </div>
+</div>
+
+<!-- Runs before (and independently of) the module: plain ES5, no modules, no
+     import maps, so it still executes in a browser that cannot load the
+     viewer at all — Pale Moon and friends. It picks the language, translates
+     the static interface, names the tab, and raises the compatibility notice
+     if the viewer never gets off the ground. -->
+<script>
+(function(){
+  var DICT = {
+    en: {
+      'l.init':'Starting viewer…','l.dl':'Downloading model…','l.read':'Reading IFC file…','l.geom':'Building geometry…',
+      'e.title':'The model could not be displayed',
+      'e.body':'Check that a file named {file} exists on the server and that the URL points to it, for example {ex}.',
+      'e.ex':'/house.ifc','e.nogeom':'The file opened but contains no visible geometry.',
+      'h.sec':'Drag the handles to cut · the cut advances the opposite way',
+      'h.edges':'Outlines hidden to keep things smooth',
+      'c.unsup':'This browser cannot run the 3D viewer. Open it in a recent version of Chrome, Edge, Firefox or Safari.',
+      'c.fail':'The 3D viewer could not start. Check your connection or open it in a recent browser.',
+      'c.short':'Browser not supported',
+      't.sec':'Section box','t.reset':'Reset section','t.white':'White mode','t.center':'Centre model','t.full':'Fullscreen',
+      'v.iso':'Iso','v.elev':'Elevation','v.plan':'Plan','v.planT':'Plan view',
+      'v.isoNE':'North-east isometric','v.isoSE':'South-east isometric','v.isoSW':'South-west isometric','v.isoNW':'North-west isometric',
+      'v.elN':'North elevation (project north)','v.elE':'East elevation (project north)','v.elS':'South elevation (project north)','v.elW':'West elevation (project north)',
+      'd.NE':'NE','d.SE':'SE','d.SW':'SW','d.NW':'NW','d.N':'N','d.E':'E','d.S':'S','d.W':'W',
+      'p.title':'Controls','p.mouse':'Mouse','p.touch':'Touch',
+      'p.rot':'Rotate','p.rotM':'Drag','p.rotT':'1 finger',
+      'p.pan':'Pan','p.panM':'Right-click or arrows','p.panT':'2 fingers',
+      'p.zoom':'Zoom','p.zoomM':'Wheel or + / −','p.zoomT':'Pinch',
+      'g.title':'Models','g.search':'Search models…','g.count':'{n} models','g.count1':'1 model','g.none':'No model matches that search.','g.empty':'No IFC models found in this folder.','g.emptyHint':'If your server does not allow listing the folder, create a {c} file next to {b}, for example: {ex}','g.emptyEx':'["model1.ifc","model2.ifc"]','g.back':'All models','g.open':'Open'
+    },
+    es: {
+      'l.init':'Iniciando visor…','l.dl':'Descargando modelo…','l.read':'Leyendo archivo IFC…','l.geom':'Construyendo geometría…',
+      'e.title':'No se pudo mostrar el modelo',
+      'e.body':'Comprueba que existe un archivo llamado {file} en el servidor y que la URL apunta a él, por ejemplo {ex}.',
+      'e.ex':'/casa.ifc','e.nogeom':'El archivo se abrió pero no contiene geometría visible.',
+      'h.sec':'Arrastra los tiradores para recortar · el corte avanza en sentido contrario',
+      'h.edges':'Aristas ocultas para mantener la fluidez',
+      'c.unsup':'Este navegador no es compatible con el visor 3D. Ábrelo en una versión reciente de Chrome, Edge, Firefox o Safari.',
+      'c.fail':'No se pudo iniciar el visor 3D. Comprueba la conexión o ábrelo en un navegador reciente.',
+      'c.short':'Navegador no compatible',
+      't.sec':'Caja de sección','t.reset':'Restablecer sección','t.white':'Modo blanco','t.center':'Centrar modelo','t.full':'Pantalla completa',
+      'v.iso':'Iso','v.elev':'Alzado','v.plan':'Planta','v.planT':'Planta',
+      'v.isoNE':'Isométrica noreste','v.isoSE':'Isométrica sureste','v.isoSW':'Isométrica suroeste','v.isoNW':'Isométrica noroeste',
+      'v.elN':'Alzado norte del proyecto','v.elE':'Alzado este del proyecto','v.elS':'Alzado sur del proyecto','v.elW':'Alzado oeste del proyecto',
+      'd.NE':'NE','d.SE':'SE','d.SW':'SO','d.NW':'NO','d.N':'N','d.E':'E','d.S':'S','d.W':'O',
+      'p.title':'Controles','p.mouse':'Ratón','p.touch':'Táctil',
+      'p.rot':'Girar','p.rotM':'Arrastrar','p.rotT':'1 dedo',
+      'p.pan':'Mover','p.panM':'Clic derecho o flechas','p.panT':'2 dedos',
+      'p.zoom':'Zoom','p.zoomM':'Rueda o + / −','p.zoomT':'Pellizcar',
+      'g.title':'Modelos','g.search':'Buscar modelos…','g.count':'{n} modelos','g.count1':'1 modelo','g.none':'Ningún modelo coincide con la búsqueda.','g.empty':'No se encontraron modelos IFC en esta carpeta.','g.emptyHint':'Si tu servidor no permite listar la carpeta, crea un archivo {c} junto a {b}, por ejemplo: {ex}','g.emptyEx':'["modelo1.ifc","modelo2.ifc"]','g.back':'Todos los modelos','g.open':'Abrir'
+    },
+    ca: {
+      'l.init':'Iniciant el visor…','l.dl':'Baixant el model…','l.read':'Llegint el fitxer IFC…','l.geom':'Construint la geometria…',
+      'e.title':'No s\'ha pogut mostrar el model',
+      'e.body':'Comprova que existeix un fitxer anomenat {file} al servidor i que l\'URL hi apunta, per exemple {ex}.',
+      'e.ex':'/casa.ifc','e.nogeom':'El fitxer s\'ha obert però no conté geometria visible.',
+      'h.sec':'Arrossega les nanses per retallar · el tall avança en sentit contrari',
+      'h.edges':'Arestes ocultes per mantenir la fluïdesa',
+      'c.unsup':'Aquest navegador no pot executar el visor 3D. Obre\'l en una versió recent de Chrome, Edge, Firefox o Safari.',
+      'c.fail':'No s\'ha pogut iniciar el visor 3D. Comprova la connexió o fes servir un navegador recent.',
+      'c.short':'Navegador no compatible',
+      't.sec':'Caixa de secció','t.reset':'Restableix la secció','t.white':'Mode blanc','t.center':'Centra el model','t.full':'Pantalla completa',
+      'v.iso':'Iso','v.elev':'Alçat','v.plan':'Planta','v.planT':'Planta',
+      'v.isoNE':'Isomètrica nord-est','v.isoSE':'Isomètrica sud-est','v.isoSW':'Isomètrica sud-oest','v.isoNW':'Isomètrica nord-oest',
+      'v.elN':'Alçat nord del projecte','v.elE':'Alçat est del projecte','v.elS':'Alçat sud del projecte','v.elW':'Alçat oest del projecte',
+      'd.NE':'NE','d.SE':'SE','d.SW':'SO','d.NW':'NO','d.N':'N','d.E':'E','d.S':'S','d.W':'O',
+      'p.title':'Controls','p.mouse':'Ratolí','p.touch':'Tàctil',
+      'p.rot':'Girar','p.rotM':'Arrossegar','p.rotT':'1 dit',
+      'p.pan':'Moure','p.panM':'Clic dret o fletxes','p.panT':'2 dits',
+      'p.zoom':'Zoom','p.zoomM':'Roda o + / −','p.zoomT':'Pessigar',
+      'g.title':'Models','g.search':'Cerca models…','g.count':'{n} models','g.count1':'1 model','g.none':'Cap model no coincideix amb la cerca.','g.empty':'No s\'han trobat models IFC en aquesta carpeta.','g.emptyHint':'Si el teu servidor no permet llistar la carpeta, crea un fitxer {c} al costat d\'{b}, per exemple: {ex}','g.emptyEx':'["model1.ifc","model2.ifc"]','g.back':'Tots els models','g.open':'Obrir'
+    },
+    fr: {
+      'l.init':'Démarrage du visualiseur…','l.dl':'Téléchargement du modèle…','l.read':'Lecture du fichier IFC…','l.geom':'Construction de la géométrie…',
+      'e.title':'Impossible d\'afficher le modèle',
+      'e.body':'Vérifiez qu\'un fichier nommé {file} existe sur le serveur et que l\'URL pointe vers lui, par exemple {ex}.',
+      'e.ex':'/maison.ifc','e.nogeom':'Le fichier s\'est ouvert mais ne contient aucune géométrie visible.',
+      'h.sec':'Faites glisser les poignées pour couper · la coupe avance en sens inverse',
+      'h.edges':'Arêtes masquées pour préserver la fluidité',
+      'c.unsup':'Ce navigateur ne peut pas exécuter la visionneuse 3D. Ouvrez-la dans une version récente de Chrome, Edge, Firefox ou Safari.',
+      'c.fail':'La visionneuse 3D n\'a pas pu démarrer. Vérifiez votre connexion ou utilisez un navigateur récent.',
+      'c.short':'Navigateur non compatible',
+      't.sec':'Boîte de coupe','t.reset':'Réinitialiser la coupe','t.white':'Mode blanc','t.center':'Recentrer le modèle','t.full':'Plein écran',
+      'v.iso':'Iso','v.elev':'Élévation','v.plan':'Plan','v.planT':'Vue en plan',
+      'v.isoNE':'Isométrie nord-est','v.isoSE':'Isométrie sud-est','v.isoSW':'Isométrie sud-ouest','v.isoNW':'Isométrie nord-ouest',
+      'v.elN':'Élévation nord du projet','v.elE':'Élévation est du projet','v.elS':'Élévation sud du projet','v.elW':'Élévation ouest du projet',
+      'd.NE':'NE','d.SE':'SE','d.SW':'SO','d.NW':'NO','d.N':'N','d.E':'E','d.S':'S','d.W':'O',
+      'p.title':'Commandes','p.mouse':'Souris','p.touch':'Tactile',
+      'p.rot':'Pivoter','p.rotM':'Glisser','p.rotT':'1 doigt',
+      'p.pan':'Déplacer','p.panM':'Clic droit ou flèches','p.panT':'2 doigts',
+      'p.zoom':'Zoom','p.zoomM':'Molette ou + / −','p.zoomT':'Pincer',
+      'g.title':'Modèles','g.search':'Rechercher…','g.count':'{n} modèles','g.count1':'1 modèle','g.none':'Aucun modèle ne correspond à la recherche.','g.empty':'Aucun modèle IFC trouvé dans ce dossier.','g.emptyHint':'Si votre serveur n\'autorise pas le listage du dossier, créez un fichier {c} à côté d\'{b}, par exemple : {ex}','g.emptyEx':'["modele1.ifc","modele2.ifc"]','g.back':'Tous les modèles','g.open':'Ouvrir'
+    },
+    de: {
+      'l.init':'Viewer wird gestartet…','l.dl':'Modell wird geladen…','l.read':'IFC-Datei wird gelesen…','l.geom':'Geometrie wird aufgebaut…',
+      'e.title':'Das Modell konnte nicht angezeigt werden',
+      'e.body':'Prüfen Sie, ob eine Datei namens {file} auf dem Server liegt und die URL darauf zeigt, zum Beispiel {ex}.',
+      'e.ex':'/haus.ifc','e.nogeom':'Die Datei wurde geöffnet, enthält aber keine sichtbare Geometrie.',
+      'h.sec':'Griffe ziehen zum Schneiden · der Schnitt läuft in die Gegenrichtung',
+      'h.edges':'Kanten ausgeblendet, damit es flüssig bleibt',
+      'c.unsup':'Dieser Browser kann den 3D-Viewer nicht ausführen. Öffnen Sie ihn in einer aktuellen Version von Chrome, Edge, Firefox oder Safari.',
+      'c.fail':'Der 3D-Viewer konnte nicht gestartet werden. Prüfen Sie die Verbindung oder verwenden Sie einen aktuellen Browser.',
+      'c.short':'Browser nicht unterstützt',
+      't.sec':'Schnittbox','t.reset':'Schnitt zurücksetzen','t.white':'Weißmodus','t.center':'Modell zentrieren','t.full':'Vollbild',
+      'v.iso':'Iso','v.elev':'Ansicht','v.plan':'Grundriss','v.planT':'Grundriss',
+      'v.isoNE':'Isometrie Nordost','v.isoSE':'Isometrie Südost','v.isoSW':'Isometrie Südwest','v.isoNW':'Isometrie Nordwest',
+      'v.elN':'Ansicht Nord (Projektnorden)','v.elE':'Ansicht Ost (Projektnorden)','v.elS':'Ansicht Süd (Projektnorden)','v.elW':'Ansicht West (Projektnorden)',
+      'd.NE':'NO','d.SE':'SO','d.SW':'SW','d.NW':'NW','d.N':'N','d.E':'O','d.S':'S','d.W':'W',
+      'p.title':'Steuerung','p.mouse':'Maus','p.touch':'Touch',
+      'p.rot':'Drehen','p.rotM':'Ziehen','p.rotT':'1 Finger',
+      'p.pan':'Verschieben','p.panM':'Rechtsklick oder Pfeiltasten','p.panT':'2 Finger',
+      'p.zoom':'Zoom','p.zoomM':'Rad oder + / −','p.zoomT':'Pinch-Geste',
+      'g.title':'Modelle','g.search':'Modelle suchen…','g.count':'{n} Modelle','g.count1':'1 Modell','g.none':'Kein Modell passt zur Suche.','g.empty':'In diesem Ordner wurden keine IFC-Modelle gefunden.','g.emptyHint':'Wenn Ihr Server das Auflisten des Ordners nicht erlaubt, legen Sie eine Datei {c} neben {b}, zum Beispiel: {ex}','g.emptyEx':'["modell1.ifc","modell2.ifc"]','g.back':'Alle Modelle','g.open':'Öffnen'
+    },
+    it: {
+      'l.init':'Avvio del visualizzatore…','l.dl':'Download del modello…','l.read':'Lettura del file IFC…','l.geom':'Costruzione della geometria…',
+      'e.title':'Impossibile visualizzare il modello',
+      'e.body':'Verifica che sul server esista un file chiamato {file} e che l\'URL punti a esso, ad esempio {ex}.',
+      'e.ex':'/casa.ifc','e.nogeom':'Il file è stato aperto ma non contiene geometria visibile.',
+      'h.sec':'Trascina le maniglie per tagliare · il taglio avanza in senso opposto',
+      'h.edges':'Spigoli nascosti per mantenere la fluidità',
+      'c.unsup':'Questo browser non può eseguire il visualizzatore 3D. Aprilo in una versione recente di Chrome, Edge, Firefox o Safari.',
+      'c.fail':'Non è stato possibile avviare il visualizzatore 3D. Controlla la connessione o usa un browser recente.',
+      'c.short':'Browser non supportato',
+      't.sec':'Box di sezione','t.reset':'Reimposta sezione','t.white':'Modalità bianca','t.center':'Centra il modello','t.full':'Schermo intero',
+      'v.iso':'Iso','v.elev':'Prospetto','v.plan':'Pianta','v.planT':'Pianta',
+      'v.isoNE':'Assonometria nord-est','v.isoSE':'Assonometria sud-est','v.isoSW':'Assonometria sud-ovest','v.isoNW':'Assonometria nord-ovest',
+      'v.elN':'Prospetto nord del progetto','v.elE':'Prospetto est del progetto','v.elS':'Prospetto sud del progetto','v.elW':'Prospetto ovest del progetto',
+      'd.NE':'NE','d.SE':'SE','d.SW':'SO','d.NW':'NO','d.N':'N','d.E':'E','d.S':'S','d.W':'O',
+      'p.title':'Comandi','p.mouse':'Mouse','p.touch':'Tocco',
+      'p.rot':'Ruotare','p.rotM':'Trascinare','p.rotT':'1 dito',
+      'p.pan':'Spostare','p.panM':'Tasto destro o frecce','p.panT':'2 dita',
+      'p.zoom':'Zoom','p.zoomM':'Rotellina o + / −','p.zoomT':'Pizzicare',
+      'g.title':'Modelli','g.search':'Cerca modelli…','g.count':'{n} modelli','g.count1':'1 modello','g.none':'Nessun modello corrisponde alla ricerca.','g.empty':'Nessun modello IFC trovato in questa cartella.','g.emptyHint':'Se il tuo server non permette di elencare la cartella, crea un file {c} accanto a {b}, per esempio: {ex}','g.emptyEx':'["modello1.ifc","modello2.ifc"]','g.back':'Tutti i modelli','g.open':'Apri'
+    },
+    pt: {
+      'l.init':'Iniciando o visualizador…','l.dl':'Carregando o modelo…','l.read':'Lendo o arquivo IFC…','l.geom':'Construindo a geometria…',
+      'e.title':'Não foi possível exibir o modelo',
+      'e.body':'Verifique se existe um arquivo chamado {file} no servidor e se o URL aponta para ele, por exemplo {ex}.',
+      'e.ex':'/casa.ifc','e.nogeom':'O arquivo foi aberto, mas não contém geometria visível.',
+      'h.sec':'Arraste as alças para cortar · o corte avança no sentido oposto',
+      'h.edges':'Arestas ocultas para manter a fluidez',
+      'c.unsup':'Este navegador não consegue executar o visualizador 3D. Abra-o em uma versão recente do Chrome, Edge, Firefox ou Safari.',
+      'c.fail':'Não foi possível iniciar o visualizador 3D. Verifique a conexão ou use um navegador recente.',
+      'c.short':'Navegador não compatível',
+      't.sec':'Caixa de seção','t.reset':'Redefinir seção','t.white':'Modo branco','t.center':'Centralizar modelo','t.full':'Tela cheia',
+      'v.iso':'Iso','v.elev':'Elevação','v.plan':'Planta','v.planT':'Planta',
+      'v.isoNE':'Isométrica nordeste','v.isoSE':'Isométrica sudeste','v.isoSW':'Isométrica sudoeste','v.isoNW':'Isométrica noroeste',
+      'v.elN':'Elevação norte do projeto','v.elE':'Elevação leste do projeto','v.elS':'Elevação sul do projeto','v.elW':'Elevação oeste do projeto',
+      'd.NE':'NE','d.SE':'SE','d.SW':'SO','d.NW':'NO','d.N':'N','d.E':'L','d.S':'S','d.W':'O',
+      'p.title':'Controles','p.mouse':'Mouse','p.touch':'Toque',
+      'p.rot':'Girar','p.rotM':'Arrastar','p.rotT':'1 dedo',
+      'p.pan':'Mover','p.panM':'Botão direito ou setas','p.panT':'2 dedos',
+      'p.zoom':'Zoom','p.zoomM':'Roda ou + / −','p.zoomT':'Pinçar',
+      'g.title':'Modelos','g.search':'Procurar modelos…','g.count':'{n} modelos','g.count1':'1 modelo','g.none':'Nenhum modelo corresponde à procura.','g.empty':'Não foram encontrados modelos IFC nesta pasta.','g.emptyHint':'Se o teu servidor não permitir listar a pasta, cria um ficheiro {c} junto de {b}, por exemplo: {ex}','g.emptyEx':'["modelo1.ifc","modelo2.ifc"]','g.back':'Todos os modelos','g.open':'Abrir'
+    },
+    sv: {
+      'l.init':'Startar visaren…','l.dl':'Laddar ner modellen…','l.read':'Läser IFC-filen…','l.geom':'Bygger geometrin…',
+      'e.title':'Modellen kunde inte visas',
+      'e.body':'Kontrollera att en fil som heter {file} finns på servern och att adressen pekar på den, till exempel {ex}.',
+      'e.ex':'/hus.ifc','e.nogeom':'Filen öppnades men innehåller ingen synlig geometri.',
+      'h.sec':'Dra i handtagen för att skära · snittet går åt motsatt håll',
+      'h.edges':'Kanter dolda för att behålla flytet',
+      'c.unsup':'Den här webbläsaren kan inte köra 3D-visaren. Öppna den i en aktuell version av Chrome, Edge, Firefox eller Safari.',
+      'c.fail':'3D-visaren kunde inte starta. Kontrollera anslutningen eller använd en modern webbläsare.',
+      'c.short':'Webbläsaren stöds inte',
+      't.sec':'Sektionsbox','t.reset':'Återställ sektion','t.white':'Vitt läge','t.center':'Centrera modellen','t.full':'Helskärm',
+      'v.iso':'Iso','v.elev':'Fasad','v.plan':'Plan','v.planT':'Planvy',
+      'v.isoNE':'Isometri nordost','v.isoSE':'Isometri sydost','v.isoSW':'Isometri sydväst','v.isoNW':'Isometri nordväst',
+      'v.elN':'Fasad mot norr (projektnord)','v.elE':'Fasad mot öster (projektnord)','v.elS':'Fasad mot söder (projektnord)','v.elW':'Fasad mot väster (projektnord)',
+      'd.NE':'NO','d.SE':'SO','d.SW':'SV','d.NW':'NV','d.N':'N','d.E':'Ö','d.S':'S','d.W':'V',
+      'p.title':'Kontroller','p.mouse':'Mus','p.touch':'Pekskärm',
+      'p.rot':'Rotera','p.rotM':'Dra','p.rotT':'1 finger',
+      'p.pan':'Panorera','p.panM':'Högerklick eller piltangenter','p.panT':'2 fingrar',
+      'p.zoom':'Zoom','p.zoomM':'Hjul eller + / −','p.zoomT':'Nyp',
+      'g.title':'Modeller','g.search':'Sök modeller…','g.count':'{n} modeller','g.count1':'1 modell','g.none':'Ingen modell matchar sökningen.','g.empty':'Inga IFC-modeller hittades i den här mappen.','g.emptyHint':'Om din server inte tillåter att mappen listas, skapa en fil {c} bredvid {b}, till exempel: {ex}','g.emptyEx':'["modell1.ifc","modell2.ifc"]','g.back':'Alla modeller','g.open':'Öppna'
+    }
+  };
+
+  // Device language, honouring the full preference list: the first entry
+  // with a translation wins, matching region first ('pt-BR') then the base
+  // language ('pt'), and falling back to English.
+  function pickLang(){
+    var prefs = [];
+    try{
+      if(navigator.languages && navigator.languages.length) prefs = [].slice.call(navigator.languages);
+      else if(navigator.language) prefs = [navigator.language];
+      else if(navigator.userLanguage) prefs = [navigator.userLanguage];
+    }catch(e){}
+    for(var i = 0; i < prefs.length; i++){
+      var code = String(prefs[i]).toLowerCase();
+      if(DICT[code]) return code;
+      var base = code.split('-')[0];
+      if(DICT[base]) return base;
+    }
+    return 'en';
+  }
+
+  var lang = pickLang();
+  function t(key, vars){
+    var table = DICT[lang] || DICT.en;
+    var str = table[key];
+    if(str === undefined) str = DICT.en[key];
+    if(str === undefined) return key;
+    if(vars) for(var k in vars){ if(vars.hasOwnProperty(k)) str = str.split('{' + k + '}').join(vars[k]); }
+    return str;
+  }
+  window.__i18n = { lang: lang, t: t };
+  try{ document.documentElement.setAttribute('lang', lang); }catch(e){}
+
+  // Static interface text: [data-i18n] sets the label, [data-i18n-title] the
+  // tooltip and accessible name.
+  function applyStatic(){
+    var i, els;
+    els = document.querySelectorAll('[data-i18n]');
+    for(i = 0; i < els.length; i++) els[i].textContent = t(els[i].getAttribute('data-i18n'));
+    els = document.querySelectorAll('[data-i18n-ph]');
+    for(i = 0; i < els.length; i++) els[i].setAttribute('placeholder', t(els[i].getAttribute('data-i18n-ph')));
+    els = document.querySelectorAll('[data-i18n-title]');
+    for(i = 0; i < els.length; i++){
+      var key = els[i].getAttribute('data-i18n-title');
+      els[i].setAttribute('title', t(key));
+      els[i].setAttribute('aria-label', t(key));
+    }
+  }
+
+
+  // ---------------- Model library ----------------
+  // With no model in the URL the page is a menu instead of a viewer. Kept in
+  // this ES5 half on purpose: the menu then works even in browsers that could
+  // never run the 3D module.
+  var CFG = window.IFC_LIBRARY || {};
+  var THUMB_DIR = typeof CFG.thumbDir === 'string' ? CFG.thumbDir : 'thumbnails/';
+  var THUMB_EXT = CFG.thumbExt && CFG.thumbExt.length ? CFG.thumbExt : ['png','jpg','jpeg','webp','avif'];
+  // The only source of the list. There is no built-in fallback on purpose:
+  // if this file is missing the menu says so instead of showing stale models.
+  var MANIFEST = (typeof CFG.manifest === 'string' && CFG.manifest) ? CFG.manifest : 'library.json';
+
+  // Where the menu lives, seen from a page that is currently showing a model.
+  // Handles every routing style the viewer accepts, not just ?ifc=.
+  function libraryHref(){
+    var path = window.location.pathname;
+    var afterIndex = path.match(/^(.*index\.html?)\/.+\.ifc$/i);
+    if(afterIndex) return afterIndex[1];
+    var trailing = path.match(/^(.*\/)[^\/]+\.ifc$/i);
+    if(trailing) return trailing[1];
+    return path;   // ?ifc= or #model.ifc: dropping query and hash is enough
+  }
+
+  function modelHref(file){
+    // Slashes stay readable so a model in a subfolder still gets a clean URL.
+    return libraryHref() + '?ifc=' + encodeURIComponent(file).replace(/%2F/gi, '/');
+  }
+
+  // 'obra/casa.ifc' -> 'casa'
+  function stem(file){
+    var base = String(file).split('/').pop();
+    return base.replace(/\.ifc$/i, '');
+  }
+
+  // thumbnails/casa.png, .jpg, … and thumbnails/casa.ifc.png as a last try,
+  // for anyone who names the image after the whole filename.
+  function thumbCandidates(entry){
+    var list = [], i;
+    if(entry.thumb) list.push(entry.thumb);
+    var base = String(entry.file).split('/').pop();
+    var name = base.replace(/\.ifc$/i, '');
+    for(i = 0; i < THUMB_EXT.length; i++) list.push(THUMB_DIR + name + '.' + THUMB_EXT[i]);
+    for(i = 0; i < THUMB_EXT.length; i++) list.push(THUMB_DIR + base + '.' + THUMB_EXT[i]);
+    return list;
+  }
+
+  // Accepts 'casa.ifc' or { file:'casa.ifc', title:…, note:…, thumb:… }.
+  function normalise(raw){
+    var entry = (typeof raw === 'string') ? { file: raw } : (raw || {});
+    if(!entry.file) return null;
+    entry.file = String(entry.file).replace(/^\.?\//, '');
+    if(!/\.ifc$/i.test(entry.file)) entry.file += '.ifc';
+    if(!entry.title) entry.title = stem(entry.file);
+    return entry;
+  }
+
+  var FALLBACK_SVG =
+    '<svg viewBox="0 0 66 60" aria-hidden="true">' +
+      '<line class="fb-ground" x1="6" y1="53" x2="60" y2="53"/>' +
+      '<rect class="fb-solid" x="11" y="46" width="44" height="6" rx="1.5"/>' +
+      '<rect class="fb-solid" x="15" y="28" width="36" height="18"/>' +
+      '<path class="fb-roof" d="M8 29 33 10 58 29 Z"/>' +
+      '<rect class="fb-hole" x="29" y="36" width="8" height="10" rx="0.8"/>' +
+      '<rect class="fb-hole" x="19" y="32" width="7" height="6" rx="0.8"/>' +
+      '<rect class="fb-hole" x="40" y="32" width="7" height="6" rx="0.8"/>' +
+    '</svg>';
+
+  var ARROW_SVG =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" ' +
+    'stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13M12.5 6l6 6-6 6"/></svg>';
+
+  function esc(str){
+    return String(str).replace(/[&<>"']/g, function(c){
+      return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c];
+    });
+  }
+
+  // One <img> per card that walks the candidate list on error and only shows
+  // itself once a file actually loads, so a missing thumbnail is silent.
+  function wireThumb(img, candidates){
+    var i = 0;
+    function next(){
+      if(i >= candidates.length){ img.parentNode.removeChild(img); return; }
+      img.src = candidates[i++];
+    }
+    img.onload = function(){
+      if(img.naturalWidth) img.className = 'ready';
+      else next();
+    };
+    img.onerror = next;
+    next();
+  }
+
+  function card(entry){
+    var a = document.createElement('a');
+    a.className = 'lib-card';
+    a.href = modelHref(entry.file);
+    a.title = entry.file;
+    a.setAttribute('data-search', (entry.title + ' ' + entry.file + ' ' + (entry.note || '')).toLowerCase());
+
+    a.innerHTML =
+      '<span class="lib-thumb"><span class="lib-fallback">' + FALLBACK_SVG + '</span></span>' +
+      '<span class="lib-info">' +
+        '<span class="lib-text">' +
+          '<span class="lib-name">' + esc(entry.title) + '</span>' +
+          (entry.note ? '<span class="lib-note">' + esc(entry.note) + '</span>' : '') +
+        '</span>' +
+        '<span class="lib-go">' + ARROW_SVG + '</span>' +
+      '</span>';
+
+    var img = document.createElement('img');
+    img.alt = '';
+    img.loading = 'lazy';
+    img.decoding = 'async';
+    a.querySelector('.lib-thumb').appendChild(img);
+    wireThumb(img, thumbCandidates(entry));
+    return a;
+  }
+
+  function render(entries){
+    var grid   = document.getElementById('lib-grid');
+    var empty  = document.getElementById('lib-empty');
+    var search = document.getElementById('lib-search');
+    var wrap   = document.getElementById('lib-search-wrap');
+    if(!grid) return;
+
+    grid.innerHTML = '';
+    if(!entries.length){
+      empty.innerHTML =
+        '<strong>' + esc(t('g.empty')) + '</strong>' +
+        t('g.emptyHint', {
+          b: '<code>index.html</code>',
+          c: '<code>' + esc(MANIFEST) + '</code>',
+          ex: '<code>' + esc(t('g.emptyEx')) + '</code>'
+        });
+      empty.hidden = false;
+      return;
+    }
+
+    for(var i = 0; i < entries.length; i++) grid.appendChild(card(entries[i]));
+
+    // Always available, like the search box in the document library.
+    if(wrap && search){
+      wrap.hidden = false;
+      search.addEventListener('input', function(){
+        var q = search.value.trim().toLowerCase();
+        var cards = grid.children, shown = 0, j;
+        for(j = 0; j < cards.length; j++){
+          var hit = !q || cards[j].getAttribute('data-search').indexOf(q) !== -1;
+          cards[j].hidden = !hit;
+          if(hit) shown++;
+        }
+        empty.innerHTML = '<strong>' + esc(t('g.none')) + '</strong>';
+        empty.hidden = shown !== 0;
+      });
+    }
+  }
+
+  // Both shapes are accepted: a plain array, or { "models": [ … ] }.
+  function fromManifest(data){
+    var raw = (data && data.length) ? data
+            : (data && data.models && data.models.length) ? data.models
+            : [];
+    var list = [], i, e;
+    for(i = 0; i < raw.length; i++){ e = normalise(raw[i]); if(e) list.push(e); }
+    return list;
+  }
+
+  // The list always comes from the manifest. Anything that goes wrong —
+  // no server (file://), 404, broken JSON, empty array — ends up in the same
+  // place: render([]), which prints the "create a library.json" notice.
+  function loadLibrary(){
+    if(window.fetch){
+      window.fetch(MANIFEST, { cache: 'no-cache' })
+        .then(function(res){ return res.ok ? res.json() : null; })
+        .then(function(data){ render(fromManifest(data)); })
+        .catch(function(){ render([]); });
+      return;
+    }
+    // Old browsers that never got fetch still get the same list.
+    try{
+      var xhr = new XMLHttpRequest();
+      xhr.open('GET', MANIFEST + (MANIFEST.indexOf('?') === -1 ? '?' : '&') + '_=' + Date.now(), true);
+      xhr.onreadystatechange = function(){
+        if(xhr.readyState !== 4) return;
+        var data = null;
+        try{
+          if((xhr.status >= 200 && xhr.status < 300) || (xhr.status === 0 && xhr.responseText)){
+            data = JSON.parse(xhr.responseText);
+          }
+        }catch(e){ data = null; }
+        render(fromManifest(data));
+      };
+      xhr.send();
+    }catch(e){ render([]); }
+  }
+
+  function buildLibrary(){
+    var root = document.getElementById('library');
+    var app  = document.getElementById('app');
+    if(!root) return;
+    if(app) app.hidden = true;
+    root.hidden = false;
+
+    var heading = CFG.title || t('g.title');
+    document.title = heading;
+    var h1 = document.getElementById('lib-title');
+    if(h1) h1.textContent = heading;
+
+    loadLibrary();
+  }
+
+  function ifcName(){
+    try{
+      var path = decodeURIComponent(window.location.pathname);
+      var m = path.match(/index\.html?\/(.+\.ifc)$/i) || path.match(/\/([^\/]+\.ifc)$/i);
+      var name = m ? m[1] : '';
+      if(!name && window.location.search){
+        var q = window.location.search.match(/[?&]ifc=([^&]+)/i);
+        if(q) name = decodeURIComponent(q[1]);
+      }
+      if(!name && window.location.hash) name = decodeURIComponent(window.location.hash.replace(/^#/, ''));
+      if(!/\.ifc$/i.test(name)) return '';
+      return name.split('/').pop();
+    }catch(e){ return ''; }
+  }
+  var name = ifcName();
+  if(name) document.title = name.replace(/\.ifc$/i, '');
+
+  // No model in the URL: the page is the menu, and the 3D module never boots
+  // (the injector below reads this flag, so three.js is not even downloaded).
+  var LIBRARY_MODE = !name;
+  window.__LIBRARY_MODE = LIBRARY_MODE;
+
+  // Everything the viewer cannot do without. Import maps are the usual
+  // stumbling block: a browser can run modules and still fail to resolve
+  // 'three'.
+  var supported = true;
+  try{
+    if(!('noModule' in document.createElement('script'))) supported = false;
+    if(!(window.HTMLScriptElement && HTMLScriptElement.supports && HTMLScriptElement.supports('importmap'))) supported = false;
+    if(typeof WebAssembly !== 'object' || typeof WebAssembly.instantiate !== 'function') supported = false;
+    if(!('WebGLRenderingContext' in window)) supported = false;
+  }catch(e){ supported = false; }
+
+  function raiseNotice(){
+    // The module sets this the instant it starts. If it did, the detection
+    // was wrong about this browser and there is nothing to warn about.
+    if(window.__viewerBooted) return;
+    var note = document.getElementById('compat-note');
+    if(note){
+      // Feature checks passed but nothing started: more likely the CDN than
+      // the browser, so say so rather than blaming the browser.
+      note.textContent = t(supported ? 'c.fail' : 'c.unsup');
+      note.className = 'show';
+    }
+    var house = document.querySelector('.house-builder');
+    if(house) house.style.display = 'none';
+    var track = document.getElementById('loading-progress-track');
+    if(track) track.style.display = 'none';
+    var text = document.getElementById('loading-text');
+    if(text) text.textContent = t('c.short');
+  }
+
+  // Give the viewer a chance to start first: a short grace period when the
+  // checks already failed, a long one otherwise to catch silent failures.
+  function arm(){ window.setTimeout(raiseNotice, supported ? 10000 : 1500); }
+  function start(){
+    applyStatic();
+    if(LIBRARY_MODE){ buildLibrary(); return; }   // nothing to load, nothing to warn about
+    var back = document.getElementById('btn-library');
+    if(back) back.addEventListener('click', function(){ window.location.href = libraryHref(); });
+    // The corner link gets a real href rather than a click handler, so
+    // middle-click and ctrl/cmd-click still open the menu in a new tab.
+    var backLink = document.getElementById('btn-back');
+    if(backLink) backLink.href = libraryHref();
+    arm();
+  }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+  else start();
+})();
+</script>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+    "web-ifc": "https://cdn.jsdelivr.net/npm/web-ifc@0.0.70/web-ifc-api.js"
+  }
+}
+</script>
+
+<!-- Held as plain text and injected by the script at the very bottom, so a
+     page showing the menu never downloads three.js or web-ifc at all. -->
+<script type="text/plain" id="viewer-module-src">
+window.__viewerBooted = true;   // tells the ES5 pre-flight check the module ran
+
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { IfcAPI, IFCSPACE, IFCOPENINGELEMENT, IFCSITE, IFCGEOMETRICREPRESENTATIONCONTEXT } from 'web-ifc';
+
+const WASM_PATH = 'https://cdn.jsdelivr.net/npm/web-ifc@0.0.70/';
+
+// ---------------- DOM ----------------
+const canvas       = document.getElementById('viewport');
+const stage        = document.getElementById('stage');
+const overlay      = document.getElementById('loading-overlay');
+const loadingText  = document.getElementById('loading-text');
+const progressBar  = document.getElementById('loading-progress-bar');
+const progressWrap = document.getElementById('loading-progress-track');
+const spinner      = document.querySelector('.house-builder');
+const errorBox     = document.getElementById('error-box');
+const errorBody    = document.getElementById('error-body');
+const errorDetail  = document.getElementById('error-detail');
+const modelNameEl  = document.getElementById('model-name');
+const btnSection   = document.getElementById('btn-section');
+const btnReset     = document.getElementById('btn-section-reset');
+const btnWhite     = document.getElementById('btn-white');
+const btnFit       = document.getElementById('btn-fit');
+const btnFull      = document.getElementById('btn-fullscreen');
+const hint         = document.getElementById('section-hint');
+
+// Same table the ES5 pre-flight built, so both halves speak one language.
+const I18N = window.__i18n || { lang: 'en', t: (k) => k };
+const t = (key, vars) => I18N.t(key, vars);
+const escapeHtml = (str) => String(str).replace(/[&<>"']/g, c => (
+  { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]
+));
+
+const setStatus   = (txt) => { loadingText.textContent = txt; };
+const setProgress = (v)   => { progressBar.style.width = Math.round(Math.max(0, Math.min(1, v)) * 100) + '%'; };
+const nextFrame   = ()    => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+// ---------------- IFC path resolution ----------------
+// Points the viewer at a file straight from the URL:
+//   /casa.ifc                  (server rewrites the path to this page)
+//   /index.html/casa.ifc       (servers that pass the extra segment through)
+//   /index.html?ifc=casa.ifc   (explicit override, also accepts subfolders)
+//   /index.html#casa.ifc       (works on any static host, no rewrite needed)
+function resolveIfcPath(){
+  try{
+    const path = decodeURIComponent(window.location.pathname);
+
+    const afterIndex = path.match(/index\.html?\/(.+\.ifc)$/i);
+    if(afterIndex && afterIndex[1]) return '/' + afterIndex[1].replace(/^\/+/, '');
+
+    const trailing = path.match(/\/([^\/]+\.ifc)$/i);
+    if(trailing && trailing[1]) return '/' + trailing[1];
+
+    const qp = new URLSearchParams(window.location.search).get('ifc');
+    if(qp) return qp;
+
+    const hash = decodeURIComponent(window.location.hash.replace(/^#/, '')).trim();
+    if(/\.ifc$/i.test(hash)) return hash;
+  }catch(err){
+    console.error('IFC viewer · could not read the model path from the URL:', err);
+  }
+  return 'modelo.ifc';
+}
+
+function basename(path){
+  try{
+    const clean = path.split('?')[0].split('#')[0];
+    return decodeURIComponent(clean.split('/').pop() || '').trim() || 'modelo.ifc';
+  }catch(err){ return 'modelo.ifc'; }
+}
+
+const IFC_PATH = resolveIfcPath();
+const IFC_NAME = basename(IFC_PATH);
+errorBody.innerHTML = t('e.body', {
+  file: '<code>' + escapeHtml(IFC_NAME) + '</code>',
+  ex:   '<code>' + escapeHtml(t('e.ex')) + '</code>'
+});
+modelNameEl.innerHTML = '';
+modelNameEl.appendChild(document.createTextNode(IFC_NAME.replace(/\.ifc$/i, '')));
+const extSpan = document.createElement('span');
+extSpan.className = 'ext';
+extSpan.textContent = '.ifc';
+modelNameEl.appendChild(extSpan);
+modelNameEl.title = IFC_NAME;
+document.title = IFC_NAME.replace(/\.ifc$/i, '');
+
+// ---------------- Scene ----------------
+// ---------------- Device tier ----------------
+// Probed on a throwaway context, before the real renderer exists, so the
+// renderer can be created with settings this machine can actually keep up
+// with — and so the heavier display modes know whether to offer themselves.
+function probeDevice(){
+  let gpu = '', webgl2 = false;
+  try{
+    const probe = document.createElement('canvas');
+    const gl = probe.getContext('webgl2') || probe.getContext('webgl');
+    if(gl){
+      webgl2 = typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext;
+      const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+      if(dbg) gpu = String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) || '');
+      const lose = gl.getExtension('WEBGL_lose_context');
+      if(lose) lose.loseContext();
+    }
+  }catch(err){ /* probing must never block startup */ }
+
+  const cores = navigator.hardwareConcurrency || 0;
+  const mem = navigator.deviceMemory || 0;
+  const mobile = /Android|iPhone|iPad|iPod|Mobile|Silk/i.test(navigator.userAgent) ||
+                 (navigator.maxTouchPoints > 1 && /Mac/.test(navigator.platform || ''));
+  const software = /swiftshader|llvmpipe|software|basic render|microsoft basic/i.test(gpu);
+
+  let score = 0;
+  if(software) score += 3;          // no GPU at all: everything is expensive
+  if(!webgl2) score += 1;
+  if(cores && cores <= 4) score += 1;
+  if(mem && mem <= 4) score += 1;
+  if(mobile) score += 1;
+
+  // 'low' only trims quality settings — resolution, antialiasing, the fill
+  // light. Nothing gates the display mode: white mode is the cheap path, so
+  // there is no device that is better off without it.
+  return { gpu, cores, mem, mobile, software, webgl2, score, low: score >= 2 };
+}
+const DEVICE = probeDevice();
+const MAX_DPR = DEVICE.low ? 1 : (DEVICE.mobile ? 1.5 : 2);
+
+const renderer = new THREE.WebGLRenderer({
+  canvas,
+  alpha: true,
+  stencil: true,
+  antialias: !DEVICE.low,
+  powerPreference: 'high-performance'
+});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_DPR));
+renderer.localClippingEnabled = true;   // per-material clipping: the gizmo stays uncut
+
+const scene = new THREE.Scene();
+
+const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 2000);
+camera.up.set(0, 0, 1);                 // IFC is Z-up; keep it that way so Z means "height"
+
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.screenSpacePanning = true;
+controls.rotateSpeed = 0.9;
+controls.zoomSpeed = 0.9;
+controls.panSpeed = 0.9;
+controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+controls.mouseButtons = {
+  LEFT: THREE.MOUSE.ROTATE,
+  MIDDLE: THREE.MOUSE.DOLLY,
+  RIGHT: THREE.MOUSE.PAN
+};
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+// Tracked in a list with their base intensity so white mode can ease them
+// back without losing the original rig.
+const lights = [];
+function addLight(light){
+  light.userData.base = light.intensity;
+  lights.push(light);
+  scene.add(light);
+  return light;
+}
+addLight(new THREE.AmbientLight(0xffffff, 0.85));
+const hemi = addLight(new THREE.HemisphereLight(0xf2f1ee, 0x3a3a3c, 1.15));
+hemi.position.set(0, 0, 1);
+const key = addLight(new THREE.DirectionalLight(0xffffff, 1.5));
+key.position.set(1, -1.4, 2.2);
+// The fill light only softens the shadowed side; on a weak GPU the extra
+// per-fragment light is not worth it.
+if(!DEVICE.low){
+  const fill = addLight(new THREE.DirectionalLight(0xffffff, 0.6));
+  fill.position.set(-1.6, 1.2, 0.8);
+}
+
+const modelRoot = new THREE.Group();
+scene.add(modelRoot);
+let modelGroup = null;   // the loaded model, offset onto the origin
+
+// +90° about X maps web-ifc's (x, y, z) back to IFC's (x, -z, y): height
+// returns to Z, plan north returns to +Y.
+const IFC_TO_Z_UP = new THREE.Matrix4().makeRotationX(Math.PI / 2);
+
+// Basis every placement is composed with. It starts as the axis fix alone
+// and picks up the project-north correction once the file has been read.
+const MODEL_BASIS = new THREE.Matrix4().copy(IFC_TO_Z_UP);
+
+// ---------------- Project north ----------------
+// The model is aligned to PROJECT north, not true north.
+//
+// Two things could rotate a model away from its own design grid, and this
+// handles both. The site's placement chain is what carries the survey/true
+// north rotation when a model is exported in shared coordinates: it is baked
+// into every element's placement, so its plan angle is measured here and
+// taken back out. IfcGeometricRepresentationContext.TrueNorth is read only
+// to report it — applying it is exactly what we do not want, since it would
+// swing the building off its design grid by the declination angle.
+const handleValue = v => (v && typeof v === 'object' && 'value' in v) ? v.value : v;
+
+function vectorOf(ifcAPI, modelID, id, fallback){
+  try{
+    const line = ifcAPI.GetLine(modelID, id);
+    const raw = line && (line.DirectionRatios || line.Coordinates);
+    if(!raw) return fallback;
+    const a = raw.map(handleValue);
+    return [a[0] || 0, a[1] || 0, a[2] || 0];
+  }catch(err){ return fallback; }
+}
+
+function axisPlacementMatrix(ifcAPI, modelID, id){
+  const m = new THREE.Matrix4();
+  try{
+    const p = ifcAPI.GetLine(modelID, id);
+    if(!p) return m;
+    const loc = p.Location ? vectorOf(ifcAPI, modelID, handleValue(p.Location), [0, 0, 0]) : [0, 0, 0];
+    const z = new THREE.Vector3(...(p.Axis ? vectorOf(ifcAPI, modelID, handleValue(p.Axis), [0, 0, 1]) : [0, 0, 1]));
+    const xRef = new THREE.Vector3(...(p.RefDirection ? vectorOf(ifcAPI, modelID, handleValue(p.RefDirection), [1, 0, 0]) : [1, 0, 0]));
+    if(z.lengthSq() === 0) z.set(0, 0, 1); else z.normalize();
+    const x = xRef.clone().sub(z.clone().multiplyScalar(xRef.dot(z)));
+    if(x.lengthSq() < 1e-12) x.set(1, 0, 0).sub(z.clone().multiplyScalar(z.x));
+    x.normalize();
+    const y = new THREE.Vector3().crossVectors(z, x);
+    m.makeBasis(x, y, z);
+    m.setPosition(loc[0], loc[1], loc[2]);
+  }catch(err){ /* malformed placement: treat as identity */ }
+  return m;
+}
+
+function placementChainMatrix(ifcAPI, modelID, id, depth){
+  if(!id || (depth || 0) > 16) return new THREE.Matrix4();
+  try{
+    const lp = ifcAPI.GetLine(modelID, id);
+    if(!lp) return new THREE.Matrix4();
+    const local = lp.RelativePlacement
+      ? axisPlacementMatrix(ifcAPI, modelID, handleValue(lp.RelativePlacement))
+      : new THREE.Matrix4();
+    const parent = lp.PlacementRelTo
+      ? placementChainMatrix(ifcAPI, modelID, handleValue(lp.PlacementRelTo), (depth || 0) + 1)
+      : new THREE.Matrix4();
+    return parent.multiply(local);
+  }catch(err){ return new THREE.Matrix4(); }
+}
+
+function readProjectNorth(ifcAPI, modelID){
+  let siteRotation = 0;
+  try{
+    const sites = ifcAPI.GetLineIDsWithType(modelID, IFCSITE);
+    for(let i = 0; i < sites.size(); i++){
+      const site = ifcAPI.GetLine(modelID, sites.get(i));
+      if(!site || !site.ObjectPlacement) continue;
+      const e = placementChainMatrix(ifcAPI, modelID, handleValue(site.ObjectPlacement), 0).elements;
+      const angle = Math.atan2(e[1], e[0]);     // plan angle of the site's X axis
+      if(Math.abs(angle) > 1e-9){ siteRotation = angle; break; }
+    }
+  }catch(err){ /* no site, or an unusual schema: nothing to undo */ }
+
+  let trueNorth = null;
+  try{
+    const ctxs = ifcAPI.GetLineIDsWithType(modelID, IFCGEOMETRICREPRESENTATIONCONTEXT);
+    for(let i = 0; i < ctxs.size(); i++){
+      const ctx = ifcAPI.GetLine(modelID, ctxs.get(i));
+      if(ctx && ctx.TrueNorth){
+        const d = vectorOf(ifcAPI, modelID, handleValue(ctx.TrueNorth), null);
+        if(d){ trueNorth = Math.atan2(d[0], d[1]); break; }   // measured from +Y
+      }
+    }
+  }catch(err){ /* TrueNorth is optional */ }
+
+  return { siteRotation, trueNorth };
+}
+
+// ---------------- Section box state ----------------
+// Five planes only: X and Y cut from both sides, Z from the top alone.
+const clipPlanes = [
+  new THREE.Plane(new THREE.Vector3( 1, 0, 0), 0),  // keeps x > min.x
+  new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0),  // keeps x < max.x
+  new THREE.Plane(new THREE.Vector3( 0, 1, 0), 0),  // keeps y > min.y
+  new THREE.Plane(new THREE.Vector3( 0,-1, 0), 0),  // keeps y < max.y
+  new THREE.Plane(new THREE.Vector3( 0, 0,-1), 0)   // keeps z < max.z
+];
+// Shared array handed to every model material. Emptying it turns clipping
+// off everywhere at once, without touching each material.
+const activePlanes = [];
+const modelMaterials = [];
+const clippedMaterials = [];   // every material bound to activePlanes
+const modelMeshes = [];
+const capMeshes = [];   // watertight subset, used to fill the section cuts
+
+// Solid fill for the cut surfaces. The stencil meshes live with the model
+// (same transform as the geometry they count); the cap quads live in world
+// space, where the clipping planes are defined.
+const capsGroup = new THREE.Group();
+capsGroup.visible = false;
+scene.add(capsGroup);
+const caps = [];
+const CAP_COLOR = 0xcfcdc8;
+
+const limits     = new THREE.Box3();   // model extents: the section box can never exceed these
+const sectionBox = new THREE.Box3();   // current clip region
+let sectionOn = false;
+let modelReady = false;
+
+function updatePlanes(){
+  clipPlanes[0].constant = -sectionBox.min.x;
+  clipPlanes[1].constant =  sectionBox.max.x;
+  clipPlanes[2].constant = -sectionBox.min.y;
+  clipPlanes[3].constant =  sectionBox.max.y;
+  clipPlanes[4].constant =  sectionBox.max.z;
+  updateCaps();
+}
+
+// One cap per plane. Front and back faces of the model are counted into the
+// stencil buffer (increment on back, decrement on front); wherever the count
+// is non-zero the ray went into solid material, so the quad fills it in and
+// the cut reads as solid instead of hollow.
+function buildCaps(parent, diagonal){
+  if(!capMeshes.length) return;
+  const size = Math.max(diagonal * 2.2, 1);
+  const quadGeo = new THREE.PlaneGeometry(size, size);
+
+  for(let i = 0; i < clipPlanes.length; i++){
+    const plane = clipPlanes[i];
+    const others = clipPlanes.filter(p => p !== plane);
+
+    const stencil = new THREE.Group();
+    stencil.visible = false;
+    const base = {
+      depthWrite: false, depthTest: false, colorWrite: false,
+      stencilWrite: true, stencilFunc: THREE.AlwaysStencilFunc,
+      clippingPlanes: [plane]
+    };
+    const backMat = new THREE.MeshBasicMaterial(Object.assign({}, base, {
+      side: THREE.BackSide,
+      stencilFail: THREE.IncrementWrapStencilOp,
+      stencilZFail: THREE.IncrementWrapStencilOp,
+      stencilZPass: THREE.IncrementWrapStencilOp
+    }));
+    const frontMat = new THREE.MeshBasicMaterial(Object.assign({}, base, {
+      side: THREE.FrontSide,
+      stencilFail: THREE.DecrementWrapStencilOp,
+      stencilZFail: THREE.DecrementWrapStencilOp,
+      stencilZPass: THREE.DecrementWrapStencilOp
+    }));
+
+    for(const mesh of capMeshes){
+      const back = new THREE.Mesh(mesh.geometry, backMat);
+      const front = new THREE.Mesh(mesh.geometry, frontMat);
+      back.renderOrder = front.renderOrder = 10 + i * 2;
+      stencil.add(back, front);
+    }
+    parent.add(stencil);
+
+    const stencilOpts = {
+      side: THREE.DoubleSide,
+      clippingPlanes: others,
+      polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
+      stencilWrite: true,
+      stencilRef: 0,
+      stencilFunc: THREE.NotEqualStencilFunc,
+      stencilFail: THREE.ReplaceStencilOp,
+      stencilZFail: THREE.ReplaceStencilOp,
+      stencilZPass: THREE.ReplaceStencilOp
+    };
+    const shadedMat = new THREE.MeshLambertMaterial(Object.assign({ color: CAP_COLOR }, stencilOpts));
+    // Unlit white: in white mode the cut face stays the brightest surface,
+    // which is what makes a section read as a cut rather than as a wall.
+    const whiteMat  = new THREE.MeshBasicMaterial(Object.assign({ color: 0xffffff }, stencilOpts));
+
+    const quad = new THREE.Mesh(quadGeo, whiteMode ? whiteMat : shadedMat);
+    quad.renderOrder = 11 + i * 2;
+    quad.visible = false;
+    quad.onAfterRender = (r) => r.clearStencil();   // leave the buffer clean for the next plane
+    capsGroup.add(quad);
+
+    caps.push({ planeIndex: i, plane, stencil, quad, shadedMat, whiteMat });
+  }
+  updateCaps();
+}
+
+// A plane sitting at the model's own limit isn't cutting anything, so its
+// cap (and its two full-model stencil passes) can stay switched off.
+function planeIsCutting(i){
+  const eps = 1e-4;
+  switch(i){
+    case 0: return sectionBox.min.x > limits.min.x + eps;
+    case 1: return sectionBox.max.x < limits.max.x - eps;
+    case 2: return sectionBox.min.y > limits.min.y + eps;
+    case 3: return sectionBox.max.y < limits.max.y - eps;
+    default: return sectionBox.max.z < limits.max.z - eps;
+  }
+}
+
+const _capPoint = new THREE.Vector3();
+
+function updateCaps(){
+  if(!caps.length) return;
+  invalidate();
+  for(const cap of caps){
+    const on = sectionOn && planeIsCutting(cap.planeIndex);
+    cap.stencil.visible = on;
+    cap.quad.visible = on;
+    if(!on) continue;
+    cap.plane.coplanarPoint(_capPoint);
+    cap.quad.position.copy(_capPoint);
+    cap.quad.lookAt(
+      _capPoint.x - cap.plane.normal.x,
+      _capPoint.y - cap.plane.normal.y,
+      _capPoint.z - cap.plane.normal.z
+    );
+  }
+}
+
+const SECTION_HINT = t('h.sec');
+let hintTimer = null;
+
+function showHint(message, duration){
+  hint.textContent = message || SECTION_HINT;
+  hint.classList.add('show');
+  clearTimeout(hintTimer);
+  if(duration !== 0) hintTimer = setTimeout(() => hint.classList.remove('show'), duration || 3600);
+}
+
+function setSectionEnabled(on){
+  sectionOn = on && modelReady;
+  activePlanes.length = 0;
+  if(sectionOn) activePlanes.push(...clipPlanes);
+  // The shader is compiled per clipping-plane count, so every material bound
+  // to the shared array has to know the count just changed.
+  for(const m of clippedMaterials) m.needsUpdate = true;
+  capsGroup.visible = sectionOn;
+  updateCaps();
+  gizmo.visible = sectionOn;
+  btnSection.classList.toggle('active', sectionOn);
+  btnReset.disabled = !sectionOn;
+  if(sectionOn) showHint();
+  else { hint.classList.remove('show'); faceHighlight.visible = false; }
+  invalidate();
+}
+
+// ---------------- Section gizmo ----------------
+const GIZMO_COLOR = 0xe7e7e4;
+const gizmo = new THREE.Group();
+gizmo.visible = false;
+gizmo.renderOrder = 10;
+scene.add(gizmo);
+
+// Wireframe cage, drawn on top of the model so it stays readable from inside.
+const boxLines = new THREE.LineSegments(
+  new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
+  new THREE.LineBasicMaterial({ color: GIZMO_COLOR, transparent: true, opacity: 0.5, depthTest: false })
+);
+gizmo.add(boxLines);
+
+// Translucent quad that lights up on the face being dragged.
+const faceHighlight = new THREE.Mesh(
+  new THREE.PlaneGeometry(1, 1),
+  new THREE.MeshBasicMaterial({
+    color: GIZMO_COLOR, transparent: true, opacity: 0.09,
+    side: THREE.DoubleSide, depthTest: false, depthWrite: false
+  })
+);
+faceHighlight.visible = false;
+faceHighlight.renderOrder = 11;
+gizmo.add(faceHighlight);
+
+// One grip per cutting plane: a small plate sitting on the face with an
+// arrow pointing out along the axis it moves on.
+const AXES = { x: new THREE.Vector3(1,0,0), y: new THREE.Vector3(0,1,0), z: new THREE.Vector3(0,0,1) };
+const HANDLE_DEFS = [
+  { axis: 'x', dir: -1 }, { axis: 'x', dir: 1 },
+  { axis: 'y', dir: -1 }, { axis: 'y', dir: 1 },
+  { axis: 'z', dir:  1 }                          // top only, per spec — no floor cut
+];
+
+const handleMat = new THREE.MeshBasicMaterial({
+  color: GIZMO_COLOR, transparent: true, opacity: 0.78, depthTest: false
+});
+const handleMatHot = new THREE.MeshBasicMaterial({
+  color: 0xffffff, transparent: true, opacity: 1, depthTest: false
+});
+const coneGeo = new THREE.ConeGeometry(0.5, 1.0, 20);
+const padGeo  = new THREE.BoxGeometry(1.35, 0.09, 1.35);
+
+const handles = HANDLE_DEFS.map(def => {
+  const g = new THREE.Group();
+  g.renderOrder = 12;
+  const pad = new THREE.Mesh(padGeo, handleMat);
+  const cone = new THREE.Mesh(coneGeo, handleMat);
+  cone.position.y = 0.62;
+  g.add(pad, cone);
+  // Cones are built pointing +Y; aim the whole grip outward along its axis.
+  const outward = AXES[def.axis].clone().multiplyScalar(def.dir);
+  g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), outward);
+  g.userData = { axis: def.axis, dir: def.dir, outward, parts: [pad, cone] };
+  gizmo.add(g);
+  return g;
+});
+
+function setHandleHot(handle, hot){
+  if(!handle) return;
+  for(const p of handle.userData.parts) p.material = hot ? handleMatHot : handleMat;
+}
+
+const _size = new THREE.Vector3();
+const _center = new THREE.Vector3();
+
+function faceCenter(handle, out){
+  sectionBox.getSize(_size);
+  sectionBox.getCenter(_center);
+  out.copy(_center);
+  const a = handle.userData.axis;
+  out[a] = handle.userData.dir < 0 ? sectionBox.min[a] : sectionBox.max[a];
+  return out;
+}
+
+const _fc = new THREE.Vector3();
+
+function updateGizmo(){
+  sectionBox.getSize(_size);
+  sectionBox.getCenter(_center);
+  boxLines.position.copy(_center);
+  boxLines.scale.set(Math.max(_size.x, 1e-5), Math.max(_size.y, 1e-5), Math.max(_size.z, 1e-5));
+  for(const h of handles) h.position.copy(faceCenter(h, _fc));
+  const hot = dragging ? dragging.handle : hovered;
+  if(hot) placeFaceHighlight(hot);
+  faceHighlight.visible = !!hot && sectionOn;
+  invalidate();
+}
+
+function placeFaceHighlight(handle){
+  const a = handle.userData.axis;
+  sectionBox.getSize(_size);
+  faceHighlight.position.copy(faceCenter(handle, _fc));
+  faceHighlight.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), handle.userData.outward);
+  // The plane's local +Z is aimed outward, which lands its local X along
+  // world Z on the two X faces — hence the swap below.
+  if(a === 'x')      faceHighlight.scale.set(Math.max(_size.z, 1e-5), Math.max(_size.y, 1e-5), 1);
+  else if(a === 'y') faceHighlight.scale.set(Math.max(_size.x, 1e-5), Math.max(_size.z, 1e-5), 1);
+  else               faceHighlight.scale.set(Math.max(_size.x, 1e-5), Math.max(_size.y, 1e-5), 1);
+}
+
+// Grips keep a constant on-screen size at any zoom level or model scale.
+const HANDLE_PX = 21;
+function scaleHandles(){
+  const h = renderer.domElement.clientHeight || 1;
+  const k = 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) / h;
+  for(const handle of handles){
+    const d = camera.position.distanceTo(handle.position);
+    handle.scale.setScalar(Math.max(d * k * HANDLE_PX, 1e-6));
+  }
+}
+
+// ---------------- Dragging the section planes ----------------
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+let hovered = null;
+let dragging = null;
+
+function toPointer(ev){
+  const r = canvas.getBoundingClientRect();
+  pointer.x = ((ev.clientX - r.left) / r.width) * 2 - 1;
+  pointer.y = -((ev.clientY - r.top) / r.height) * 2 + 1;
+  return pointer;
+}
+
+function pickHandle(ev){
+  if(!sectionOn) return null;
+  raycaster.setFromCamera(toPointer(ev), camera);
+  const hits = raycaster.intersectObjects(handles, true);
+  if(!hits.length) return null;
+  let o = hits[0].object;
+  while(o && !o.userData.axis) o = o.parent;
+  return o || null;
+}
+
+// Parameter along the handle's axis line that is closest to the pointer ray —
+// the standard closest-point-between-two-lines solve, with both directions
+// normalized so a = c = 1.
+function axisParam(ev, origin, axisDir){
+  raycaster.setFromCamera(toPointer(ev), camera);
+  const ro = raycaster.ray.origin, rd = raycaster.ray.direction;
+  const w0 = origin.clone().sub(ro);
+  const b = rd.dot(axisDir);
+  const d = rd.dot(w0);
+  const e = axisDir.dot(w0);
+  const denom = 1 - b * b;
+  if(Math.abs(denom) < 1e-6) return null;      // looking straight down the axis
+  return (e - b * d) / denom;
+}
+
+function minGap(axis){
+  const span = limits.max[axis] - limits.min[axis];
+  return Math.max(span * 0.005, 1e-4);
+}
+
+function onPointerDown(ev){
+  if(ev.button !== undefined && ev.button !== 0) return;
+  const handle = pickHandle(ev);
+  if(!handle) return;
+
+  const axis = handle.userData.axis;
+  const axisDir = AXES[axis];
+  const origin = faceCenter(handle, new THREE.Vector3());
+  const t0 = axisParam(ev, origin, axisDir);
+  if(t0 === null) return;
+
+  dragging = {
+    handle, axis, axisDir, origin, t0,
+    start: handle.userData.dir < 0 ? sectionBox.min[axis] : sectionBox.max[axis]
+  };
+  controls.enabled = false;                      // OrbitControls bails out while disabled
+  setHandleHot(handle, true);
+  canvas.style.cursor = 'grabbing';
+  try{ canvas.setPointerCapture(ev.pointerId); }catch(e){}
+  ev.preventDefault();
+}
+
+function onPointerMove(ev){
+  if(dragging){
+    const t = axisParam(ev, dragging.origin, dragging.axisDir);
+    if(t === null) return;
+    const axis = dragging.axis;
+    const gap = minGap(axis);
+    // Inverted on purpose: pushing the pointer one way pulls the plane the
+    // other, so you drag *against* the face you want to cut away.
+    let v = dragging.start - (t - dragging.t0);
+    if(dragging.handle.userData.dir < 0){
+      v = Math.min(Math.max(v, limits.min[axis]), sectionBox.max[axis] - gap);
+      sectionBox.min[axis] = v;
+    }else{
+      v = Math.max(Math.min(v, limits.max[axis]), sectionBox.min[axis] + gap);
+      sectionBox.max[axis] = v;
+    }
+    updatePlanes();
+    updateGizmo();
+    return;
+  }
+
+  if(!sectionOn) return;
+  const handle = pickHandle(ev);
+  if(handle !== hovered){
+    setHandleHot(hovered, false);
+    hovered = handle;
+    setHandleHot(hovered, true);
+    canvas.style.cursor = handle ? 'grab' : '';
+    invalidate();
+  }
+}
+
+function onPointerUp(ev){
+  if(!dragging) return;
+  setHandleHot(dragging.handle, dragging.handle === hovered);
+  try{ canvas.releasePointerCapture(ev.pointerId); }catch(e){}
+  dragging = null;
+  controls.enabled = true;
+  invalidate();
+  canvas.style.cursor = hovered ? 'grab' : '';
+}
+
+// Capture phase so the grip wins the gesture before OrbitControls sees it.
+canvas.addEventListener('pointerdown', onPointerDown, true);
+window.addEventListener('pointermove', onPointerMove);
+window.addEventListener('pointerup', onPointerUp);
+window.addEventListener('pointercancel', onPointerUp);
+
+// ---------------- White mode ----------------
+// Every surface drawn in plain white, so the model reads as a single
+// material study instead of a patchwork of IFC colours. Scene lighting still
+// applies — a white model with no shading at all would be a flat silhouette
+// — but the lights are eased back so lit faces land just under clipping and
+// keep their modelling.
+//
+// The surfaces are white and the geometry's own edges are drawn over them in
+// black, which is what keeps the form readable once every material is the
+// same colour. It is on by default on every device, with the button there to
+// bring the IFC colours back.
+let whiteMaterial = null;
+let whiteMode = false;
+let edgeGroup = null;
+let edgeMaterial = null;
+let edgesBuilding = false;
+let edgesAllowed = true;
+const EDGE_ANGLE = 20;            // degrees between faces before an edge is drawn
+const WHITE_LIGHT_SCALE = 0.78;
+
+// EdgesGeometry has to walk every triangle, so this runs in the background
+// after the model is already on screen, one mesh per frame. The outlines
+// arrive over the first couple of seconds instead of holding up the view.
+async function buildEdges(){
+  if(edgesBuilding || edgeGroup || !modelGroup) return;
+  edgesBuilding = true;
+  edgeMaterial = new THREE.LineBasicMaterial({ color: 0x000000, clippingPlanes: activePlanes });
+  clippedMaterials.push(edgeMaterial);
+
+  const group = new THREE.Group();
+  group.visible = whiteMode && edgesAllowed;
+  modelGroup.add(group);
+  edgeGroup = group;
+
+  for(const mesh of modelMeshes){
+    const lines = new THREE.LineSegments(
+      new THREE.EdgesGeometry(mesh.geometry, EDGE_ANGLE),
+      edgeMaterial
+    );
+    lines.renderOrder = 500;      // after the section caps, so cut solids get outlined too
+    group.add(lines);
+    invalidate();
+    await nextFrame();
+  }
+  edgesBuilding = false;
+}
+
+function setWhiteMode(on){
+  if(!whiteMaterial){
+    whiteMaterial = new THREE.MeshLambertMaterial({
+      color: 0xffffff,
+      side: THREE.DoubleSide,
+      clippingPlanes: activePlanes,
+      // Holds the surfaces back a hair so the black outlines sit cleanly on
+      // top instead of fighting them for depth.
+      polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1
+    });
+    clippedMaterials.push(whiteMaterial);
+  }
+
+  whiteMode = on;
+  for(const m of modelMeshes){
+    if(on){
+      if(!m.userData.shaded) m.userData.shaded = m.material;
+      m.material = whiteMaterial;
+    }else if(m.userData.shaded){
+      m.material = m.userData.shaded;
+    }
+  }
+  // Section cuts follow the mode, so a cut solid stays white too.
+  for(const c of caps) c.quad.material = on ? c.whiteMat : c.shadedMat;
+  for(const l of lights) l.intensity = on ? l.userData.base * WHITE_LIGHT_SCALE : l.userData.base;
+  if(edgeGroup) edgeGroup.visible = on && edgesAllowed;
+  if(on) buildEdges();            // no await: the outlines fill in behind the view
+
+  btnWhite.classList.toggle('active', on);
+  invalidate();
+}
+
+function toggleWhiteMode(){
+  if(!modelReady) return;
+  setWhiteMode(!whiteMode);
+}
+
+// ---------------- Camera framing ----------------
+// Directions are "where the camera sits", on IFC axes: +X east, +Y north,
+// +Z up — with north meaning PROJECT north (see readProjectNorth), so the
+// elevations line up with the building's own grid rather than with the
+// survey bearing. Elevations look horizontally at the façade they name.
+const VIEWS = {
+  'iso-ne': new THREE.Vector3( 1,  1, 0.8),
+  'iso-se': new THREE.Vector3( 1, -1, 0.8),
+  'iso-so': new THREE.Vector3(-1, -1, 0.8),
+  'iso-no': new THREE.Vector3(-1,  1, 0.8),
+  'el-n':   new THREE.Vector3( 0,  1, 0),
+  'el-e':   new THREE.Vector3( 1,  0, 0),
+  'el-s':   new THREE.Vector3( 0, -1, 0),
+  'el-o':   new THREE.Vector3(-1,  0, 0),
+  // A hair off vertical keeps north pointing up the screen instead of
+  // leaving the azimuth undefined straight overhead.
+  'top':    new THREE.Vector3( 0, -0.0012, 1)
+};
+const DEFAULT_VIEW = 'iso-se';
+
+const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+let flight = null;
+
+function framing(box, dir){
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const radius = Math.max(size.length() / 2, 1e-3);
+  const vFov = THREE.MathUtils.degToRad(camera.fov);
+  const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
+  const dist = (radius / Math.sin(Math.min(vFov, hFov) / 2)) * 1.08;
+  return {
+    position: center.clone().add(dir.clone().normalize().multiplyScalar(dist)),
+    target: center,
+    radius
+  };
+}
+
+function applyFraming(f, animated){
+  camera.near = Math.max(f.radius / 500, 0.01);
+  camera.far  = f.radius * 200;
+  camera.updateProjectionMatrix();
+  if(animated && !REDUCED_MOTION){
+    flight = {
+      fromPos: camera.position.clone(), toPos: f.position,
+      fromTarget: controls.target.clone(), toTarget: f.target,
+      t0: performance.now(), dur: 480
+    };
+  }else{
+    flight = null;
+    camera.position.copy(f.position);
+    controls.target.copy(f.target);
+    controls.update();
+  }
+  invalidate();
+}
+
+function stepFlight(){
+  if(!flight) return;
+  const k = Math.min((performance.now() - flight.t0) / flight.dur, 1);
+  const e = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;   // easeInOutCubic
+  camera.position.lerpVectors(flight.fromPos, flight.toPos, e);
+  controls.target.lerpVectors(flight.fromTarget, flight.toTarget, e);
+  if(k >= 1) flight = null;
+}
+
+function currentBox(){
+  return sectionOn ? sectionBox : limits;
+}
+
+function setView(name, animated){
+  const dir = VIEWS[name];
+  if(!dir || !modelReady) return;
+  applyFraming(framing(currentBox(), dir), animated);
+  markActiveView(name);
+}
+
+function markActiveView(name){
+  for(const b of viewButtons) b.classList.toggle('active', b.dataset.view === name);
+}
+
+// Reframes without changing the angle you are already looking from.
+function refit(animated){
+  if(!modelReady) return;
+  const dir = camera.position.clone().sub(controls.target);
+  if(dir.lengthSq() < 1e-12) dir.copy(VIEWS[DEFAULT_VIEW]);
+  applyFraming(framing(currentBox(), dir), animated);
+}
+
+function zoomBy(factor){
+  const offset = camera.position.clone().sub(controls.target).multiplyScalar(factor);
+  const len = offset.length();
+  if(len < camera.near * 2 || len > camera.far * 0.5) return;
+  camera.position.copy(controls.target).add(offset);
+  flight = null;
+  controls.update();
+  invalidate();
+}
+
+function resize(){
+  const w = stage.clientWidth || 1;
+  const h = stage.clientHeight || 1;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  invalidate();
+}
+window.addEventListener('resize', resize);
+if(window.ResizeObserver) new ResizeObserver(resize).observe(stage);
+
+// ---------------- Render loop ----------------
+// The viewer is idle most of the time, so frames are drawn on demand: any
+// change calls invalidate(), OrbitControls raises 'change' while it damps,
+// and nothing is drawn in between. A still model costs no GPU at all.
+let needsRender = true;
+function invalidate(){ needsRender = true; }
+controls.addEventListener('change', invalidate);
+document.addEventListener('visibilitychange', invalidate);
+
+// Watchdog over *consecutive* drawn frames, i.e. while the user is actually
+// moving something: first it drops the resolution, then it retires the heavy
+// display mode rather than letting the viewer crawl.
+let lastFrame = 0, slowStreak = 0, fastStreak = 0, degraded = 0;
+
+// White surfaces themselves are the cheap path, so they are never what gets
+// sacrificed. Resolution goes first, then the outlines, which are the one
+// genuinely expensive thing on screen.
+function degrade(){
+  const dpr = renderer.getPixelRatio();
+  if(dpr > 1){
+    renderer.setPixelRatio(1);
+    resize();
+    degraded = 1;
+  }else if(dpr > 0.75){
+    renderer.setPixelRatio(0.75);
+    resize();
+    degraded = 2;
+  }else if(edgesAllowed && edgeGroup){
+    edgesAllowed = false;
+    edgeGroup.visible = false;
+    showHint(t('h.edges'));
+    degraded = 3;
+  }else{
+    degraded = 3;   // nothing left to give back
+  }
+  slowStreak = 0;
+  invalidate();
+}
+
+function animate(){
+  requestAnimationFrame(animate);
+  if(flight){ stepFlight(); invalidate(); }
+  controls.update();                 // raises 'change' -> invalidate() while damping
+  if(!needsRender){ lastFrame = 0; return; }
+  needsRender = false;
+
+  if(gizmo.visible) scaleHandles();
+  renderer.render(scene, camera);
+
+  const now = performance.now();
+  if(lastFrame && now - lastFrame < 250 && degraded < 3){
+    const dt = now - lastFrame;
+    if(dt > 42){ slowStreak++; fastStreak = 0; }
+    else { fastStreak++; if(fastStreak > 12){ slowStreak = 0; fastStreak = 0; } }
+    if(slowStreak > 30) degrade();
+  }
+  lastFrame = now;
+}
+
+// ---------------- Loading ----------------
+async function download(url){
+  const res = await fetch(url);
+  if(!res.ok) throw new Error('HTTP ' + res.status + ' ' + res.statusText);
+  const total = Number(res.headers.get('content-length')) || 0;
+  if(!res.body || !total){
+    const buf = await res.arrayBuffer();
+    setProgress(0.7);
+    return new Uint8Array(buf);
+  }
+  const reader = res.body.getReader();
+  const chunks = [];
+  let received = 0;
+  for(;;){
+    const { done, value } = await reader.read();
+    if(done) break;
+    chunks.push(value);
+    received += value.length;
+    setProgress(0.12 + (received / total) * 0.58);
+  }
+  const out = new Uint8Array(received);
+  let off = 0;
+  for(const c of chunks){ out.set(c, off); off += c.length; }
+  return out;
+}
+
+// Walks every placed geometry once, transforms it into world space and
+// batches it by colour so the whole model ends up as a handful of meshes.
+// Closed-surface test by the divergence theorem: the area-weighted face
+// normals of a watertight solid cancel out. Open shells (site surfaces,
+// glazing panes, imported furniture) do not, and they are exactly the
+// geometry that would smear phantom fill across a section cut, so they are
+// kept out of the capping pass.
+function isClosedSurface(verts, index){
+  let nx = 0, ny = 0, nz = 0, area = 0;
+  for(let k = 0; k < index.length; k += 3){
+    const a = index[k] * 6, b = index[k + 1] * 6, c = index[k + 2] * 6;
+    const ux = verts[b] - verts[a], uy = verts[b + 1] - verts[a + 1], uz = verts[b + 2] - verts[a + 2];
+    const vx = verts[c] - verts[a], vy = verts[c + 1] - verts[a + 1], vz = verts[c + 2] - verts[a + 2];
+    const cx = uy * vz - uz * vy, cy = uz * vx - ux * vz, cz = ux * vy - uy * vx;
+    nx += cx; ny += cy; nz += cz;
+    area += Math.sqrt(cx * cx + cy * cy + cz * cz);
+  }
+  if(area <= 0) return false;
+  return Math.sqrt(nx * nx + ny * ny + nz * nz) / area < 0.02;
+}
+
+function buildModel(ifcAPI, modelID){
+  const groups = new Map();
+  const matrix = new THREE.Matrix4();
+  const placedMatrix = new THREE.Matrix4();
+  const normalMatrix = new THREE.Matrix3();
+  const p = new THREE.Vector3();
+  const n = new THREE.Vector3();
+
+  ifcAPI.StreamAllMeshes(modelID, (mesh) => {
+    let type = 0;
+    try{ type = ifcAPI.GetLineType(modelID, mesh.expressID); }catch(e){}
+    if(type === IFCSPACE || type === IFCOPENINGELEMENT) return;   // never drawn in a viewer
+
+    const placed = mesh.geometries;
+    for(let i = 0; i < placed.size(); i++){
+      const pg = placed.get(i);
+      const geo = ifcAPI.GetGeometry(modelID, pg.geometryExpressID);
+      const verts = ifcAPI.GetVertexArray(geo.GetVertexData(), geo.GetVertexDataSize());
+      const index = ifcAPI.GetIndexArray(geo.GetIndexData(), geo.GetIndexDataSize());
+      const count = verts.length / 6;
+
+      if(count && index.length){
+        // MODEL_BASIS undoes web-ifc's Y-up normalisation and, on top of
+        // that, any survey rotation baked into the placements — leaving the
+        // model on IFC's own axes, squared to PROJECT north: X east,
+        // Y project-north, Z height. That is what the camera, the elevation
+        // views and the top-only Z cut of the section box all assume.
+        placedMatrix.fromArray(pg.flatTransformation);
+        matrix.multiplyMatrices(MODEL_BASIS, placedMatrix);
+        normalMatrix.getNormalMatrix(matrix);
+
+        const pos = new Float32Array(count * 3);
+        const nor = new Float32Array(count * 3);
+        for(let v = 0; v < count; v++){
+          const s = v * 6, d = v * 3;
+          p.set(verts[s], verts[s + 1], verts[s + 2]).applyMatrix4(matrix);
+          n.set(verts[s + 3], verts[s + 4], verts[s + 5]).applyMatrix3(normalMatrix).normalize();
+          pos[d] = p.x; pos[d + 1] = p.y; pos[d + 2] = p.z;
+          nor[d] = n.x; nor[d + 1] = n.y; nor[d + 2] = n.z;
+        }
+
+        const c = pg.color;
+        const solid = isClosedSurface(verts, index);
+        const key = `${c.x.toFixed(3)}_${c.y.toFixed(3)}_${c.z.toFixed(3)}_${c.w.toFixed(2)}_${solid ? 's' : 'o'}`;
+        let g = groups.get(key);
+        if(!g){
+          g = { color: [c.x, c.y, c.z], opacity: c.w, solid, chunks: [], verts: 0, idx: 0 };
+          groups.set(key, g);
+        }
+        g.chunks.push({ pos, nor, index: index.slice(0), base: g.verts });
+        g.verts += count;
+        g.idx += index.length;
+      }
+      geo.delete();
+    }
+  });
+
+  const root = new THREE.Group();
+  const bounds = new THREE.Box3();
+  let empty = true;
+
+  for(const g of groups.values()){
+    if(!g.verts) continue;
+    empty = false;
+    const pos = new Float32Array(g.verts * 3);
+    const nor = new Float32Array(g.verts * 3);
+    const idx = g.verts > 65535 ? new Uint32Array(g.idx) : new Uint16Array(g.idx);
+    let vo = 0, io = 0;
+    for(const c of g.chunks){
+      pos.set(c.pos, vo * 3);
+      nor.set(c.nor, vo * 3);
+      for(let k = 0; k < c.index.length; k++) idx[io + k] = c.index[k] + vo;
+      vo += c.pos.length / 3;
+      io += c.index.length;
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geometry.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+    geometry.setIndex(new THREE.BufferAttribute(idx, 1));
+    geometry.computeBoundingBox();
+    geometry.computeBoundingSphere();
+    bounds.union(geometry.boundingBox);
+
+    const transparent = g.opacity < 0.999;
+    const material = new THREE.MeshLambertMaterial({
+      color: new THREE.Color().setRGB(g.color[0], g.color[1], g.color[2], THREE.SRGBColorSpace),
+      side: THREE.DoubleSide,          // cut faces stay lit instead of vanishing
+      transparent,
+      opacity: g.opacity,
+      depthWrite: !transparent,
+      clippingPlanes: activePlanes,
+      clipShadows: false
+    });
+    modelMaterials.push(material);
+    clippedMaterials.push(material);
+
+    const meshObj = new THREE.Mesh(geometry, material);
+    // 0 model · 10-20 section caps · 500 outlines · 900 transparent
+    meshObj.renderOrder = transparent ? 900 : 0;
+    modelMeshes.push(meshObj);
+    if(g.solid && !transparent) capMeshes.push(meshObj);
+    root.add(meshObj);
+  }
+
+  return { root, bounds, empty };
+}
+
+function fail(message){
+  spinner.style.display = 'none';
+  progressWrap.style.display = 'none';
+  loadingText.style.display = 'none';
+  errorBox.style.display = 'block';
+  errorDetail.textContent = message || '';
+  overlay.classList.remove('hidden');
+}
+
+async function main(){
+  animate();
+  resize();
+
+  setStatus(t('l.init'));
+  setProgress(0.05);
+
+  const ifcAPI = new IfcAPI();
+  ifcAPI.SetWasmPath(WASM_PATH, true);
+  await ifcAPI.Init(null, true);          // single-threaded: no cross-origin isolation needed
+  setProgress(0.12);
+
+  setStatus(t('l.dl'));
+  let data = await download(new URL(IFC_PATH, window.location.href).href);
+
+  setStatus(t('l.read'));
+  setProgress(0.74);
+  await nextFrame();
+  const modelID = ifcAPI.OpenModel(data, { COORDINATE_TO_ORIGIN: true });
+
+  // Square the model to project north before any geometry is transformed.
+  const north = readProjectNorth(ifcAPI, modelID);
+  if(Math.abs(north.siteRotation) > 1e-9){
+    MODEL_BASIS.multiplyMatrices(
+      new THREE.Matrix4().makeRotationZ(-north.siteRotation),
+      IFC_TO_Z_UP
+    );
+  }
+
+  setStatus(t('l.geom'));
+  setProgress(0.86);
+  await nextFrame();
+  const { root, bounds, empty } = buildModel(ifcAPI, modelID);
+  // Hand the file bytes and the whole WASM heap back before the model is
+  // shown: on a big IFC that is hundreds of megabytes that the viewer would
+  // otherwise hold for the rest of the session.
+  ifcAPI.CloseModel(modelID);
+  data = null;
+  if(typeof ifcAPI.Dispose === 'function') ifcAPI.Dispose();
+
+  if(empty || bounds.isEmpty()){
+    fail(t('e.nogeom'));
+    return;
+  }
+
+  // Sit the model on Z = 0, centred over the origin in plan. Everything
+  // downstream (clip planes, gizmo, views) then works on world coordinates
+  // that line up with the model's own axes.
+  const center = bounds.getCenter(new THREE.Vector3());
+  const offset = new THREE.Vector3(-center.x, -center.y, -bounds.min.z);
+  root.position.copy(offset);
+  modelRoot.add(root);
+  modelRoot.updateMatrixWorld(true);
+  modelGroup = root;
+
+  const worldBounds = bounds.clone().translate(offset);
+
+  // A small margin keeps the fully-open section box just outside the
+  // surfaces, so nothing flickers at the limits.
+  const size = worldBounds.getSize(new THREE.Vector3());
+  const pad = Math.max(size.x, size.y, size.z) * 0.002;
+  limits.copy(worldBounds).expandByScalar(pad);
+  sectionBox.copy(limits);
+  buildCaps(root, size.length());
+  updatePlanes();
+  updateGizmo();
+
+  modelReady = true;
+  setView(DEFAULT_VIEW, false);
+
+  // White mode starts off: the model opens in its own IFC colours, and the
+  // toolbar button switches to the white study (outlines included).
+  const triangles = modelMeshes.reduce((n, m) => n + (m.geometry.index ? m.geometry.index.count : 0) / 3, 0);
+  const deg = (rad) => (rad * 180 / Math.PI).toFixed(2) + '°';
+  console.info('IFC viewer · orientation: project north' +
+               (Math.abs(north.siteRotation) > 1e-9 ? ' (site rotation removed: ' + deg(north.siteRotation) + ')' : '') +
+               (north.trueNorth !== null && Math.abs(north.trueNorth) > 1e-9
+                 ? ' · declared true north: ' + deg(north.trueNorth) + ' (not applied)'
+                 : ''));
+  console.info('IFC viewer · triangles:', Math.round(triangles),
+               '· device:', DEVICE.low ? 'low-end' : 'normal',
+               '· language:', I18N.lang,
+               DEVICE.gpu || '');
+
+  setProgress(1);
+  await nextFrame();
+  overlay.classList.add('hidden');
+}
+
+// ---------------- Toolbar ----------------
+btnSection.addEventListener('click', () => setSectionEnabled(!sectionOn));
+
+btnReset.addEventListener('click', () => {
+  sectionBox.copy(limits);
+  updatePlanes();
+  updateGizmo();
+  showHint();
+  invalidate();
+});
+
+btnWhite.addEventListener('click', toggleWhiteMode);
+
+btnFit.addEventListener('click', () => refit(true));
+
+const viewButtons = Array.from(document.querySelectorAll('.vb-btn'));
+for(const b of viewButtons){
+  b.addEventListener('click', () => setView(b.dataset.view, true));
+}
+// Any manual orbit means the camera no longer matches a named view.
+controls.addEventListener('start', () => { flight = null; markActiveView(null); });
+
+const helpPanel = document.getElementById('help-panel');
+const helpHead = document.getElementById('help-head');
+helpHead.addEventListener('click', () => {
+  const collapsed = helpPanel.classList.toggle('collapsed');
+  helpHead.setAttribute('aria-expanded', String(!collapsed));
+});
+
+
+// Keyboard: arrows pan (OrbitControls), + / − zoom.
+controls.listenToKeyEvents(window);
+window.addEventListener('keydown', (ev) => {
+  if(ev.target && /^(INPUT|TEXTAREA)$/.test(ev.target.tagName)) return;
+  if(ev.key === '+' || ev.key === '=' ) { zoomBy(1 / 1.12); ev.preventDefault(); }
+  else if(ev.key === '-' || ev.key === '_') { zoomBy(1.12); ev.preventDefault(); }
+});
+
+btnFull.addEventListener('click', () => {
+  const app = document.getElementById('app');
+  if(document.fullscreenElement) document.exitFullscreen();
+  else if(app.requestFullscreen) app.requestFullscreen();
+  else if(app.webkitRequestFullscreen) app.webkitRequestFullscreen();
+});
+document.addEventListener('fullscreenchange', () => {
+  btnFull.classList.toggle('active', !!document.fullscreenElement);
+  resize();
+});
+
+// Reload when the hash is used to switch files, so #casa.ifc works live.
+window.addEventListener('hashchange', () => window.location.reload());
+
+main().catch(err => {
+  console.error(err);
+  fail(String(err && err.message ? err.message : err));
+});
+</script>
+
+<!-- Boots the viewer, unless this page is the menu. -->
+<script>
+(function(){
+  if(window.__LIBRARY_MODE) return;
+  var src = document.getElementById('viewer-module-src');
+  if(!src) return;
+  var mod = document.createElement('script');
+  mod.type = 'module';
+  mod.textContent = src.textContent;
+  document.body.appendChild(mod);
+})();
+</script>
+
+</body>
+</html>

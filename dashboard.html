@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Estadísticas</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 860px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5;
+    }
+    h1 { font-size: 1.5rem; }
+    h2 { font-size: 1.1rem; margin-top: 2rem; }
+    .kpis { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 1rem; }
+    .kpi { border: 1px solid #ccc; border-radius: 8px; padding: 1rem; flex: 1; min-width: 130px; }
+    .kpi b { display: block; font-size: 1.8rem; line-height: 1.2; }
+    .kpi span { font-size: .85rem; opacity: .7; }
+    table { width: 100%; border-collapse: collapse; }
+    td, th { text-align: left; padding: .45rem .3rem; border-bottom: 1px solid #ddd; }
+    th { font-weight: 600; font-size: .85rem; opacity: .7; }
+    td:not(:first-child), th:not(:first-child) { text-align: right; white-space: nowrap; }
+    .ruta { font-family: ui-monospace, monospace; font-size: .9rem; }
+    .vacio { opacity: .6; font-style: italic; }
+    footer { margin-top: 2.5rem; font-size: .8rem; opacity: .6; }
+    button { font: inherit; padding: .3rem .7rem; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1>Estadísticas</h1>
+  <div id="app">Cargando…</div>
+  <footer>Se actualiza cada 30 s. <button id="salir">Olvidar token</button></footer>
+
+  <script>
+    let token = localStorage.getItem("dash_token");
+    if (!token) {
+      token = prompt("Token de acceso:");
+      if (token) localStorage.setItem("dash_token", token);
+    }
+
+    const esc = (s) => String(s).replace(/[<>&"]/g, c =>
+      ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]));
+
+    function agregar(dias, campo) {
+      const total = {};
+      for (const d of dias)
+        for (const [k, v] of Object.entries(d[campo] || {}))
+          total[k] = (total[k] || 0) + v;
+      return total;
+    }
+
+    function tiempo(seg) {
+      if (!seg) return "—";
+      if (seg < 60) return seg + " s";
+      return Math.floor(seg / 60) + "m " + String(seg % 60).padStart(2, "0") + "s";
+    }
+
+    function tabla(titulo, obj, etiqueta) {
+      const filas = Object.entries(obj).sort((a, b) => b[1] - a[1]);
+      if (!filas.length) return `<h2>${titulo}</h2><p class="vacio">Sin datos.</p>`;
+      return `<h2>${titulo}</h2><table>
+        <tr><th>${etiqueta}</th><th>Visitas</th></tr>
+        ${filas.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v}</td></tr>`).join("")}
+      </table>`;
+    }
+
+    function tablaPaginas(dias) {
+      const vis = agregar(dias, "paginas");
+      const tie = agregar(dias, "tiempoPorPagina");
+      const filas = Object.entries(vis).sort((a, b) => b[1] - a[1]);
+      if (!filas.length) return `<h2>Páginas</h2><p class="vacio">Sin datos.</p>`;
+      return `<h2>Páginas</h2><table>
+        <tr><th>Ruta</th><th>Visitas</th><th>Tiempo medio</th></tr>
+        ${filas.map(([ruta, n]) => `<tr>
+          <td class="ruta">${esc(ruta)}</td><td>${n}</td>
+          <td>${tiempo(Math.round((tie[ruta] || 0) / n))}</td></tr>`).join("")}
+      </table>`;
+    }
+
+    async function cargar() {
+      const app = document.getElementById("app");
+      try {
+        const res = await fetch(`/api/stats?token=${encodeURIComponent(token)}`);
+        if (res.status === 401) {
+          localStorage.removeItem("dash_token");
+          app.innerHTML = `<p>Token incorrecto. <a href="">Reintentar</a></p>`;
+          return;
+        }
+        if (!res.ok) throw new Error("Error " + res.status);
+
+        const dias = await res.json();
+        if (!dias.length) {
+          app.innerHTML = `<p class="vacio">Todavía no hay visitas registradas.</p>`;
+          return;
+        }
+
+        const visitas = dias.reduce((a, d) => a + (d.visitas || 0), 0);
+        const segundos = dias.reduce((a, d) => a + (d.segundosTotales || 0), 0);
+        const media = visitas ? Math.round(segundos / visitas) : 0;
+        const hoyClave = new Date().toISOString().slice(0, 10);
+        const hoy = dias.find(d => d.fecha === hoyClave)?.visitas ?? 0;
+
+        app.innerHTML = `
+          <div class="kpis">
+            <div class="kpi"><b>${visitas}</b><span>visitas · 14 días</span></div>
+            <div class="kpi"><b>${hoy}</b><span>visitas hoy</span></div>
+            <div class="kpi"><b>${tiempo(media)}</b><span>tiempo medio</span></div>
+          </div>
+          ${tablaPaginas(dias)}
+          ${tabla("Países", agregar(dias, "paises"), "País")}
+          ${tabla("Procedencia", agregar(dias, "referrers"), "Origen")}
+          ${tabla("Por día", Object.fromEntries(
+              dias.map(d => [d.fecha, d.visitas || 0])), "Fecha")}
+        `;
+      } catch (e) {
+        app.innerHTML = `<p class="vacio">No se pudo cargar: ${esc(e.message)}</p>`;
+      }
+    }
+
+    document.getElementById("salir").onclick = () => {
+      localStorage.removeItem("dash_token");
+      location.reload();
+    };
+
+    cargar();
+    setInterval(cargar, 30000);
+  </script>
+</body>
+</html>
