@@ -1,9 +1,10 @@
 ﻿node_modules/
 .env
 .netlify/
-toke.txt
+token.txt
 iniciar_servidor.py
 PDF/prerender_all.py
 PDF/generate_library.py
 PDF/pdfs/
 IFC/genrate_library.py
+netlify/functions/reset.txt
