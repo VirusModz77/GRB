@@ -1,3 +1,9 @@
-﻿node_modules
+﻿node_modules/
 .env
-.netlify
+.netlify/
+toke.txt
+iniciar_servidor.py
+PDF/prerender_all.py
+PDF/generate_library.py
+PDF/pdfs/
+IFC/genrate_library.py
